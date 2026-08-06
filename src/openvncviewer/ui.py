@@ -15,16 +15,19 @@
 # with this program. If not, see <https://www.gnu.org/licenses/>.
 """Qt user interface: a remote view that always scales to the window size."""
 
-from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF, Qt, QTimer,
-                            Signal)
+from pathlib import Path
+
+from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF,
+                            QStandardPaths, Qt, QTimer, Signal)
 from PySide6.QtGui import (QAction, QColor, QImage, QKeySequence, QPainter,
                            QPixmap)
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QMainWindow, QMessageBox, QSlider, QSpinBox,
-                               QVBoxLayout, QWidget)
+                               QMainWindow, QMessageBox, QPushButton, QSlider,
+                               QSpinBox, QVBoxLayout, QWidget)
 
-from . import __version__
+from . import __version__, secretstore
+from .history import ServerHistory
 from .rfb import RFBClient
 
 HOMEPAGE = "https://github.com/riazhassan-za/openvncviewer"
@@ -35,6 +38,16 @@ DONATION_ADDRESS = "bc1qxq4n6x3safp6wglz76gdy93zhpfcw9af29cv3g"
 DONATION_MESSAGE = (
     "Tired of being ripped off for basic software that should be free? "
     "Send donations to help fund ad-free/subs-free software for great justice.")
+
+# Separates the friendly name from the host in the recent-servers dropdown.
+HISTORY_SEPARATOR = " — "
+
+
+def default_history_path():
+    """Where the recent-servers list lives, per platform conventions."""
+    root = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+    return Path(root or ".") / "servers.json"
+
 
 # Qt key -> X11 keysym. Meta maps to Super_L, which macOS treats as Command.
 KEYSYMS = {
@@ -122,6 +135,14 @@ class RemoteView(QWidget):
         self._client = None
         self._motion_timer.stop()
         self._pending_motion = None
+        # Drop the last frame. Leaving it up implies a live session, and the
+        # image wraps a framebuffer whose owner has just gone away.
+        self._image = None
+        self._scaled = None
+        self._pressed.clear()
+        self._buttons = 0
+        self.updateGeometry()
+        self.update()
 
     def on_resize(self, width, height):
         if self._client is None:
@@ -320,12 +341,24 @@ class RemoteView(QWidget):
 
 class ConnectDialog(QDialog):
     def __init__(self, host="", port=5900, username="",
-                 wheel_speed=WHEEL_SPEED_DEFAULT, parent=None):
+                 wheel_speed=WHEEL_SPEED_DEFAULT, history=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Connect to a VNC server")
+        self._history = history if history is not None else ServerHistory(
+            default_history_path())
+        # Guards the two-way link between the host box and the fields it fills.
+        self._updating = False
 
-        self.host = QLineEdit(host)
-        self.host.setPlaceholderText("hostname or IP")
+        self.host = QComboBox()
+        self.host.setEditable(True)
+        self.host.setInsertPolicy(QComboBox.NoInsert)
+        self.host.lineEdit().setPlaceholderText("hostname or IP")
+        self.server_name = QLineEdit()
+        self.server_name.setPlaceholderText("optional label for this server")
+        self.server_name.setToolTip(
+            "A name of your choosing for this server. Shown in the recent list "
+            "and in the window title once connected.")
+
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(port)
@@ -342,21 +375,57 @@ class ConnectDialog(QDialog):
             "Standard VNC passwords are limited to 8 characters by the "
             "protocol; anything longer is ignored.")
 
+        self.save_password = QCheckBox("Save password for this server")
+        if secretstore.available():
+            self.save_password.setToolTip(
+                "Encrypts the password with your Windows account key, so the "
+                "saved file is useless\non another machine or to another user.\n"
+                "It does not protect against programs running as you.")
+        else:
+            self.save_password.setEnabled(False)
+            self.save_password.setToolTip(
+                "Unavailable: this platform has no facility to encrypt the "
+                "password with your\nlogin. It will not be stored in the clear.")
+
         form = QFormLayout()
         form.addRow("Host", self.host)
+        form.addRow("Server name", self.server_name)
         form.addRow("Port", self.port)
         form.addRow("Username", self.username)
         form.addRow("Password", self.password)
+        form.addRow("", self.save_password)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        # Laid out by hand rather than with QDialogButtonBox: the order below
+        # is fixed, and a button box reorders by role per platform.
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.setDefault(True)
+        self.connect_button.clicked.connect(self.accept)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        self.remove_button = QPushButton("Remove Server")
+        self.remove_button.setToolTip(
+            "Forget the server shown above, along with any saved password.\n"
+            "Removes only that one, so click again for the next.")
+        self.remove_button.clicked.connect(self.remove_selected)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.connect_button)
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.remove_button)
+
+        # Wired after the fields exist: filling the box fires the handler.
+        self.reload_history()
+        self.host.setEditText(host)
+        self.host.activated.connect(self._history_selected)
+        self.host.editTextChanged.connect(self._host_changed)
+        self._host_changed(host)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self._build_options(wheel_speed))
         layout.addStretch()
-        layout.addWidget(buttons)
+        layout.addLayout(buttons)
 
     def _build_options(self, wheel_speed):
         """The Options group: everything that tunes the session, not the login."""
@@ -385,10 +454,74 @@ class ConnectDialog(QDialog):
         inner.addLayout(ends)
         return options
 
+    # ------------------------------------------------------------- history
+
+    def reload_history(self):
+        """Refill the dropdown. The host itself is the item data, not its text."""
+        self._updating = True
+        try:
+            self.host.clear()
+            for entry in self._history.entries():
+                label = (f"{entry['name']}{HISTORY_SEPARATOR}{entry['host']}"
+                         if entry["name"] else entry["host"])
+                self.host.addItem(label, entry["host"])
+        finally:
+            self._updating = False
+
+    def _history_selected(self, index):
+        """Qt drops the decorated item text into the line edit; put the host back."""
+        stored = self.host.itemData(index)
+        if stored:
+            self.host.setEditText(stored)
+
+    def _host_changed(self, text):
+        entry = self._history.find(text)
+        # Nothing to remove unless this host is actually in the list.
+        self.remove_button.setEnabled(entry is not None)
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            if entry is None:
+                # A host never seen before carries no name; leave whatever port
+                # and username were typed alone.
+                self.server_name.clear()
+                self.password.clear()
+                self.save_password.setChecked(False)
+                return
+            self.server_name.setText(entry["name"])
+            self.port.setValue(entry["port"])
+            self.username.setText(entry["username"])
+
+            saved = secretstore.decrypt(entry.get("password", ""))
+            # A token that will not decrypt - written by another user, or on
+            # another machine - is treated as no saved password at all.
+            self.password.setText(saved or "")
+            self.save_password.setChecked(bool(saved))
+        finally:
+            self._updating = False
+
+    def remove_selected(self):
+        """Forget just the server currently shown, so repeated clicks work."""
+        if not self._history.remove(self.host.currentText()):
+            return
+        self.reload_history()
+
+        # Land on the next server so a second click removes that one, rather
+        # than leaving a stale host in the box that is no longer in the list.
+        remaining = self._history.hosts()
+        self._updating = True
+        try:
+            self.host.setEditText(remaining[0] if remaining else "")
+        finally:
+            self._updating = False
+        self._host_changed(self.host.currentText())
+
     def values(self):
-        return (self.host.text().strip(), self.port.value(),
+        return (self.host.currentText().strip(), self.port.value(),
                 self.username.text(), self.password.text(),
-                self.wheel_speed.value())
+                self.wheel_speed.value(), self.server_name.text().strip(),
+                self.save_password.isChecked())
 
 
 class MainWindow(QMainWindow):
@@ -402,6 +535,9 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self.client = None
+        self.history = ServerHistory(default_history_path())
+        self._pending_history = None
+        self.server_name = ""
         self.signals = ClientSignals()
         self.signals.resized.connect(self._on_resize)
         self.signals.damaged.connect(self.view.on_damage)
@@ -481,17 +617,28 @@ class MainWindow(QMainWindow):
         about.exec()
 
     def prompt_connect(self):
-        dialog = ConnectDialog(*self.last_connection, parent=self)
+        dialog = ConnectDialog(*self.last_connection, history=self.history,
+                               parent=self)
         if dialog.exec() == QDialog.Accepted:
-            host, port, username, password, wheel_speed = dialog.values()
+            (host, port, username, password, wheel_speed, name,
+             save_password) = dialog.values()
             if host:
-                self.connect_to(host, port, username, password, wheel_speed)
+                self.connect_to(host, port, username, password, wheel_speed,
+                                name, save_password)
 
     def connect_to(self, host, port, username, password,
-                   wheel_speed=WHEEL_SPEED_DEFAULT):
+                   wheel_speed=WHEEL_SPEED_DEFAULT, server_name="",
+                   save_password=False):
         self.disconnect()
         self.view.wheel_speed = wheel_speed
         self.last_connection = (host, port, username, wheel_speed)
+        # Encrypt now, while the password is still in hand. An empty token
+        # means "forget whatever was saved for this server".
+        token = secretstore.encrypt(password) if save_password else None
+        # Held until the session actually comes up: the list is of servers
+        # connected to, not of hosts typed.
+        self._pending_history = (host, port, username, server_name, token or "")
+        self.server_name = server_name
         self.status.setText(f"Connecting to {host}:{port}...")
         self.client = RFBClient(
             host, port, username, password,
@@ -507,17 +654,32 @@ class MainWindow(QMainWindow):
             self.client.stop()
             self.client = None
         self.view.detach()
+        self.server_name = ""
+        self.setWindowTitle("OpenVNCViewer")
+        self.status.setText("Not connected")
 
     def _on_resize(self, width, height):
         self.view.on_resize(width, height)
-        name = self.client.desktop_name if self.client else ""
-        self.setWindowTitle(f"{name} - OpenVNCViewer" if name else "OpenVNCViewer")
-        self.status.setText(f"Connected - remote desktop {width}x{height}, "
+        if self._pending_history:
+            self.history.remember(*self._pending_history)
+            self._pending_history = None
+
+        label = self.server_name or (self.client.desktop_name if self.client
+                                     else "")
+        self.setWindowTitle(f"{label} - OpenVNCViewer" if label
+                            else "OpenVNCViewer")
+        where = f"Connected to {label}" if label else "Connected"
+        self.status.setText(f"{where} - remote desktop {width}x{height}, "
                             "scaled to window")
 
     def _on_disconnect(self, reason):
         self.view.detach()
         self.client = None
+        self._pending_history = None  # never connected, so nothing to remember
+        # A window still titled after the server it is no longer showing reads
+        # as a live session.
+        self.server_name = ""
+        self.setWindowTitle("OpenVNCViewer")
         self.status.setText(f"Disconnected: {reason}" if reason else "Disconnected")
         if reason:
             QMessageBox.warning(self, "Disconnected", reason)
