@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openvncviewer"
-version = "0.1.0"
+# Single source of truth: openvncviewer.__version__ (see tool.setuptools.dynamic).
+dynamic = ["version"]
 description = "A VNC viewer for macOS Screen Sharing that scales the remote desktop to the client window"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -42,3 +43,6 @@ openvncviewer = "openvncviewer.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "openvncviewer.__version__" }
