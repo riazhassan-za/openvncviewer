@@ -222,10 +222,20 @@ today.
   but it also means the rules are advisory for the owner. Remove the
   `bypass_actors` entry once a second reviewer exists.
 
-- [ ] No `SECURITY.md` and no private vulnerability disclosure policy. Given
-  the unresolved items in section 1, this should exist *before* the repository
-  goes public, so nobody is forced to report a credential-exposure bug in a
-  public issue.
+- [x] `SECURITY.md` documents the disclosure process, the supported versions,
+  and the known weaknesses from section 1, so a reporter can tell at a glance
+  whether they have found something new.
+
+- [ ] **Turn on GitHub private vulnerability reporting when the repository goes
+  public.** `SECURITY.md` directs reporters to the Security tab's "Report a
+  vulnerability" button, but the API returns 404 while the repository is
+  private — it is a public-repository feature. Until it is enabled the policy
+  falls back to asking for a private channel via a detail-free issue, which is
+  clumsy. Enable with:
+
+  ```
+  gh api --method PUT repos/riazhassan-za/openvncviewer/private-vulnerability-reporting
+  ```
 
 - [ ] No issue or pull request templates, and no Dependabot configuration for
   the Actions and Python dependencies.
