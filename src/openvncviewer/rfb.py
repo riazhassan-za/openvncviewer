@@ -39,6 +39,31 @@ ENC_DESKTOP_SIZE = -223
 
 BYTES_PER_PIXEL = 4
 
+# Diffie-Hellman limits for ARD authentication. macOS Screen Sharing offers a
+# 4096-bit group with generator 5; the floor is well below that because older
+# releases may not, and the ceiling only exists to stop a server forcing
+# arbitrarily expensive modular exponentiation on us.
+DH_MIN_KEY_BYTES = 128
+DH_MAX_KEY_BYTES = 1024
+DH_MIN_PRIME_BITS = 1024
+# Miller-Rabin rounds. Each is one modexp over the modulus; the chance of
+# accepting a composite is below 4**-MILLER_RABIN_ROUNDS.
+MILLER_RABIN_ROUNDS = 20
+_SMALL_PRIMES = (3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59)
+
+# Proving a 4096-bit modulus prime costs about 2.5 seconds, which would
+# otherwise be paid on every single connect. These are groups already checked
+# with _is_probable_prime, so a match skips the test. This is a fast path and
+# not an allowlist: a prime that is not listed is still validated in full, so
+# the worst an unrecognised group costs is time.
+_VERIFIED_PRIME_DIGESTS = frozenset({
+    # macOS Screen Sharing, 4096-bit, generator 5. Verified prime - and a safe
+    # prime, so (p-1)/2 is prime too - against a live server.
+    "4ee95187682bcb230ad26a95205f6920e84708f6251b3894329b09ec23919e33",
+    # RFC 2409 group 2, 1024-bit. Used by the fake server in the tests.
+    "3f35a3f5f6c4376a744acad409bb22f8d897f949d2311d885adaa890981b67a0",
+})
+
 
 class RFBError(Exception):
     pass
@@ -194,14 +219,34 @@ class RFBClient:
         return self._read(length).decode("utf-8", "replace")
 
     def _auth_ard(self):
-        """Apple Remote Desktop auth: Diffie-Hellman, then AES-128-ECB creds."""
+        """Apple Remote Desktop auth: Diffie-Hellman, then AES-128-ECB creds.
+
+        The group is chosen by the server, so it is checked before the password
+        is encrypted under a key derived from it. This does not defend against
+        a hostile server - it holds the other private key and can read the
+        credentials whatever we do - it stops the password going out over an
+        exchange a passive eavesdropper could unwind, whether the parameters
+        were tampered with in transit or the server is simply broken.
+        """
         generator, key_len = struct.unpack("!HH", self._read(4))
+        if not DH_MIN_KEY_BYTES <= key_len <= DH_MAX_KEY_BYTES:
+            raise RFBError(
+                f"server proposed a {key_len * 8}-bit Diffie-Hellman group; "
+                f"refusing anything outside {DH_MIN_KEY_BYTES * 8}-"
+                f"{DH_MAX_KEY_BYTES * 8} bits")
+
         prime = int.from_bytes(self._read(key_len), "big")
         peer_key = int.from_bytes(self._read(key_len), "big")
+        _validate_dh_group(generator, prime, peer_key)
 
         private = int.from_bytes(os.urandom(key_len), "big")
         public = pow(generator, private, prime)
         shared = pow(peer_key, private, prime)
+        # Catches a peer key sitting in a tiny subgroup: the shared secret
+        # collapses to a constant and the AES key becomes guessable.
+        if shared <= 1 or shared >= prime - 1:
+            raise RFBError("Diffie-Hellman produced a degenerate shared "
+                           "secret; refusing to send credentials")
 
         aes_key = hashlib.md5(shared.to_bytes(key_len, "big")).digest()
         credentials = _pack_credential(self.username) + _pack_credential(self.password)
@@ -406,6 +451,64 @@ class RFBClient:
     def send_key(self, keysym, down):
         if self._ready:
             self._send(struct.pack("!BB2xI", 4, 1 if down else 0, keysym))
+
+
+def _is_probable_prime(candidate, rounds=MILLER_RABIN_ROUNDS):
+    """Miller-Rabin with random bases.
+
+    A composite modulus can have a smooth multiplicative order, which makes the
+    discrete logarithm - and so the shared secret, and so the password -
+    tractable for anyone watching the exchange.
+    """
+    if candidate < 2 or candidate % 2 == 0:
+        return candidate == 2
+    for small in _SMALL_PRIMES:
+        if candidate == small:
+            return True
+        if candidate % small == 0:
+            return False
+
+    odd, power = candidate - 1, 0
+    while odd % 2 == 0:
+        odd //= 2
+        power += 1
+
+    for _ in range(rounds):
+        base = 2 + int.from_bytes(os.urandom(16), "big") % (candidate - 3)
+        witness = pow(base, odd, candidate)
+        if witness in (1, candidate - 1):
+            continue
+        for _ in range(power - 1):
+            witness = witness * witness % candidate
+            if witness == candidate - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _prime_digest(prime):
+    """Digest of the minimal big-endian encoding, so it is padding-independent."""
+    return hashlib.sha256(
+        prime.to_bytes((prime.bit_length() + 7) // 8, "big")).hexdigest()
+
+
+def _validate_dh_group(generator, prime, peer_key):
+    """Reject a Diffie-Hellman group that would not protect the credentials."""
+    if prime.bit_length() < DH_MIN_PRIME_BITS:
+        raise RFBError(
+            f"server sent a {prime.bit_length()}-bit Diffie-Hellman prime; "
+            f"at least {DH_MIN_PRIME_BITS} bits are required")
+    if generator < 2 or generator >= prime:
+        raise RFBError(f"invalid Diffie-Hellman generator {generator}")
+    # 0, 1 and p-1 all give a shared secret with at most two possible values,
+    # so the AES key derived from it is guessable without breaking anything.
+    if peer_key <= 1 or peer_key >= prime - 1:
+        raise RFBError("server sent a degenerate Diffie-Hellman public key")
+    if _prime_digest(prime) in _VERIFIED_PRIME_DIGESTS:
+        return
+    if not _is_probable_prime(prime):
+        raise RFBError("server's Diffie-Hellman modulus is not prime")
 
 
 def _union(current, x, y, w, h):

@@ -57,25 +57,37 @@ These are documented, not undiscovered. Reporting them again will be closed as
 known — but a **pull request fixing one is very welcome**, and they are roughly
 in priority order. The full list lives in [TODO.md](TODO.md) §1.
 
-1. **Diffie-Hellman parameters from the server are trusted blindly.** The
-   generator, prime and peer public key used by ARD authentication are read
-   straight off the wire and used without validation. A malicious or spoofed
-   server can supply degenerate parameters and recover the macOS password from
-   the exchange. This is the most serious open issue.
-2. **No server identity verification.** There is no host-key pinning,
+1. **No server identity verification.** There is no host-key pinning,
    certificate check, or trust-on-first-use record. Anything that can
-   intercept TCP/5900 can impersonate the Mac.
-3. **All traffic after authentication is plaintext RFB.** Screen contents and
+   intercept TCP/5900 can impersonate the Mac and be handed the account
+   password. This is the most serious open issue, and no amount of care on our
+   side of the exchange substitutes for it.
+2. **All traffic after authentication is plaintext RFB.** Screen contents and
    keystrokes are unencrypted. Tunnel over SSH
    (`ssh -L 5900:localhost:5900 you@mac`) or a VPN on untrusted networks.
-4. **The ARD scheme is weak by Apple's design.** It derives an AES-128 key with
+3. **The ARD scheme is weak by Apple's design.** It derives an AES-128 key with
    MD5 and encrypts the credential block in ECB mode. This cannot be changed
    without the server's cooperation; implementing one of Apple's RSA-AES
    security types (31/32/33/35) is the real fix.
-5. **The password is held in memory as a Python `str`**, which cannot be zeroed
+4. **The password is held in memory as a Python `str`**, which cannot be zeroed
    after use and may persist until garbage collection.
-6. **Released executables are unsigned.** Verify the SHA-256 published in the
+5. **Released executables are unsigned.** Verify the SHA-256 published in the
    release notes before running one.
+
+## What is checked
+
+The Diffie-Hellman group offered for ARD authentication is validated before the
+password is encrypted under a key derived from it. The client refuses a prime
+below 1024 bits, a composite modulus (Miller-Rabin), a generator outside
+`2 <= g < p`, a peer public key of 0, 1 or `p-1`, and a shared secret that
+collapses to one of those. On any of these it hangs up without sending the
+credential block at all.
+
+Be clear about what that buys, because it is easy to overstate: it protects the
+exchange from a **passive eavesdropper**, and catches parameters tampered with
+in transit or a server that is simply broken. It does **not** protect against a
+hostile server — that server holds the other private key and can decrypt the
+credentials whatever group it chose. Only item 1 above would address that.
 
 ## Scope
 
