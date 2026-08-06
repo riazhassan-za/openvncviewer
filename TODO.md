@@ -175,7 +175,9 @@ today.
 
 - [x] README covering setup, running, scaling behaviour, the ARD login, and
   building the executable.
-- [ ] No screenshots or animated demo in the README.
+- [x] Screenshots in the README: a scaled session and the connect dialog.
+- [ ] No animated demo showing the window actually being resized, which is the
+  one thing a still cannot convey.
 - [ ] No troubleshooting guide (what "connection closed by server" means, what
   to enable in macOS Sharing settings, firewall notes).
 - [ ] No architecture document; the protocol/UI split is only explained in
