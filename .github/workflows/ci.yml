@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only by default; the build job elevates only what it needs.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
@@ -35,6 +39,9 @@ jobs:
   build:
     needs: test
     runs-on: windows-latest
+    # Required to create the release and upload the executable to it.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
