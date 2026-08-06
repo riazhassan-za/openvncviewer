@@ -11,6 +11,11 @@ Most viewers make you choose between a 1:1 window the size of the Mac's display
 and a scrollable viewport. This one always fits the desktop to the window,
 rescaling live as you drag the window edge.
 
+![A macOS desktop scaled to fit the viewer window](screenshots/scaled-session.png)
+
+*A 3420x2214 Retina desktop rendered into a smaller window. Drag the window
+edge and it rescales live — the Mac's own resolution is never touched.*
+
 ## Why this exists
 
 Two things are awkward with the usual Windows VNC clients against a Mac:
@@ -73,6 +78,27 @@ Mouse positions are mapped back through the same scale, so clicks land where
 you point at any window size. Clicks in the letterbox area clamp to the nearest
 remote pixel.
 
+## Mouse wheel speed
+
+<img src="screenshots/connect-dialog.png" alt="The connect dialog, with the Options group and mouse wheel speed slider" width="640">
+
+RFB carries no scroll magnitude — a wheel notch is just a button press, so the
+server has no idea how hard you spun the wheel. That is why scrolling a remote
+session feels sluggish in most VNC clients however fast you scroll.
+
+The **Options** group on the connect dialog compensates by multiplying the
+clicks sent per notch:
+
+| Slider position | Effect |
+| --- | --- |
+| Far left | The wheel is passed through untouched — one click per real notch |
+| Middle (default) | 50 clicks per notch |
+| Far right | 100 clicks per notch |
+
+The setting is remembered for the rest of the session, so reconnecting keeps
+your choice. A ceiling of 500 clicks per wheel event stops a fast flick
+flooding the server.
+
 ## How the macOS login works
 
 macOS announces itself as `RFB 003.889`; the client replies `RFB 003.008` and
@@ -109,6 +135,7 @@ without copying.
 | `tests/test_protocol.py` | Fake macOS server: auth + every encoding path |
 | `tests/test_scaling.py` | Scaling geometry, pointer mapping, painting |
 | `packaging/openvncviewer.spec` | PyInstaller build definition |
+| `screenshots/` | Images used by this README |
 
 The protocol layer is deliberately Qt-free, so it can be tested and reused
 without a GUI.
