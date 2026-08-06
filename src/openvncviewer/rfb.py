@@ -327,6 +327,15 @@ class RFBClient:
         row-sized pieces stays in cache; one 30MB memcpy does not. See
         benchmarks/decode.py.
         """
+        # Slice assignment past the end of a bytearray *grows* it rather than
+        # failing, and QImage holds a raw pointer into this buffer - so an
+        # out-of-bounds rectangle would reallocate underneath the view. One
+        # O(1) check per blit is far cheaper than that going wrong.
+        if x < 0 or y < 0 or x + w > self.width or y + h > self.height:
+            raise RFBError(
+                f"server sent a {w}x{h} rectangle at ({x}, {y}), outside the "
+                f"{self.width}x{self.height} framebuffer")
+
         stride = self.width * BYTES_PER_PIXEL
         fb = self.framebuffer
         row_len = w * BYTES_PER_PIXEL
@@ -336,6 +345,10 @@ class RFBClient:
 
     def _copy_rect(self, x, y, w, h):
         src_x, src_y = struct.unpack("!HH", self._read(4))
+        if src_x + w > self.width or src_y + h > self.height:
+            raise RFBError(
+                f"CopyRect source ({src_x}, {src_y}) {w}x{h} lies outside the "
+                f"{self.width}x{self.height} framebuffer")
         stride = self.width * BYTES_PER_PIXEL
         row_len = w * BYTES_PER_PIXEL
         fb = self.framebuffer
@@ -350,16 +363,32 @@ class RFBClient:
     # ------------------------------------------------------------------ ZRLE
 
     def _decode_zrle(self, x, y, w, h, data):
-        raw = self._zrle.decompress(data)
+        # Nothing legitimate expands past 4 bytes per pixel - that is plain RLE
+        # with every run one pixel long - plus a little per-tile overhead for
+        # subencoding bytes and palettes. Without a ceiling, a compression bomb
+        # turns a few hundred kilobytes into gigabytes of resident memory.
+        tiles = ((w + 63) // 64) * ((h + 63) // 64)
+        limit = w * h * 4 + tiles * 128 + 1024
+        raw = self._zrle.decompress(data, limit)
+        if self._zrle.unconsumed_tail:
+            raise RFBError(
+                f"ZRLE data for a {w}x{h} rectangle expanded past {limit} "
+                "bytes; refusing to keep decompressing")
+
         pos = 0
-        for tile_y in range(0, h, 64):
-            th = min(64, h - tile_y)
-            for tile_x in range(0, w, 64):
-                tw = min(64, w - tile_x)
-                pixels, pos = self._read_tile(raw, pos, tw, th)
-                # Straight into the framebuffer. Staging the whole rect in a
-                # scratch buffer first meant copying every pixel twice.
-                self._blit(x + tile_x, y + tile_y, tw, th, pixels)
+        try:
+            for tile_y in range(0, h, 64):
+                th = min(64, h - tile_y)
+                for tile_x in range(0, w, 64):
+                    tw = min(64, w - tile_x)
+                    pixels, pos = self._read_tile(raw, pos, tw, th)
+                    # Straight into the framebuffer. Staging the whole rect in
+                    # a scratch buffer first meant copying every pixel twice.
+                    self._blit(x + tile_x, y + tile_y, tw, th, pixels)
+        except (IndexError, ValueError) as exc:
+            # A truncated or malformed tile runs off the end of the buffer.
+            # Report it as the protocol error it is, not a stray IndexError.
+            raise RFBError(f"malformed or truncated ZRLE tile data ({exc})") from exc
 
     def _read_tile(self, raw, pos, tw, th):
         """Return (tile pixels as tw*th*4 bytes, new position)."""
@@ -369,6 +398,10 @@ class RFBClient:
 
         if sub == 0:  # raw CPIXELs
             end = pos + count * 3
+            # Slicing past the end truncates silently, and the shortfall would
+            # only surface later as a confusing ValueError from _expand_cpixels.
+            if end > len(raw):
+                raise RFBError("truncated raw ZRLE tile")
             return _expand_cpixels(raw[pos:end], count), end
 
         if sub == 1:  # solid colour
@@ -414,6 +447,14 @@ class RFBClient:
                 colour = _cpixel(raw, pos)
                 pos += 3
                 run, pos = _read_run_length(raw, pos)
+                # A run may claim far more pixels than the tile holds. Left
+                # unclamped, `colour * run` allocates on the attacker's word:
+                # 39KB of input produced 40MB before this check existed.
+                # Compared inline rather than via min(): this is the innermost
+                # loop of the slowest decode path.
+                remaining = count - written
+                if run > remaining:
+                    run = remaining
                 pixels.append(colour * run)
                 written += run
             return b"".join(pixels), pos
@@ -430,8 +471,15 @@ class RFBClient:
                 if index & 0x80:
                     index &= 0x7F
                     run, pos = _read_run_length(raw, pos)
+                    remaining = count - written  # never allocate past the tile
+                    if run > remaining:
+                        run = remaining
                 else:
                     run = 1
+                if index >= size:
+                    raise RFBError(
+                        f"ZRLE palette index {index} outside a {size}-entry "
+                        "palette")
                 pixels.append(palette[index] * run)
                 written += run
             return b"".join(pixels), pos

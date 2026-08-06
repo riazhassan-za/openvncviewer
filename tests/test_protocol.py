@@ -16,7 +16,7 @@ import zlib
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from openvncviewer.rfb import RFBClient
+from openvncviewer.rfb import RFBClient, RFBError
 
 # RFC 2409 group 2 (1024-bit), the size Apple's server uses.
 PRIME = int(
@@ -471,6 +471,93 @@ class DiffieHellmanValidationTest(unittest.TestCase):
         _validate_dh_group(GENERATOR, PRIME, pow(GENERATOR, 999, PRIME))
         self.assertLess(time.perf_counter() - start, 0.05,
                         "a known-good group took the slow path")
+
+
+class HostileStreamTest(unittest.TestCase):
+    """A malicious server must not be able to spend our memory or corrupt state.
+
+    Every case here is something a server can send. Going public means the
+    other end is not necessarily a Mac you own.
+    """
+
+    def make_client(self, width=WIDTH, height=HEIGHT):
+        client = RFBClient.__new__(RFBClient)
+        client.width, client.height = width, height
+        client.framebuffer = bytearray(width * height * 4)
+        client._zrle = zlib.decompressobj()
+        return client
+
+    def test_a_run_longer_than_the_tile_cannot_allocate(self):
+        """39KB of input used to produce 40MB of pixels."""
+        tile = bytearray([128])          # plain RLE
+        tile += bytes((1, 2, 3))         # one CPIXEL
+        remaining = 10_000_000 - 1       # a run far past the 4096-pixel tile
+        while remaining >= 255:
+            tile.append(255)
+            remaining -= 255
+        tile.append(remaining)
+
+        client = self.make_client()
+        pixels, _ = client._read_tile(bytes(tile), 0, 64, 64)
+        self.assertEqual(len(pixels), 64 * 64 * 4,
+                         "decoder produced more pixels than the tile holds")
+
+    def test_a_palette_run_longer_than_the_tile_cannot_allocate(self):
+        tile = bytearray([130])          # palette RLE, 2 entries
+        tile += bytes((1, 2, 3)) + bytes((4, 5, 6))
+        tile.append(0 | 0x80)            # index 0, with a run length following
+        remaining = 5_000_000 - 1
+        while remaining >= 255:
+            tile.append(255)
+            remaining -= 255
+        tile.append(remaining)
+
+        client = self.make_client()
+        pixels, _ = client._read_tile(bytes(tile), 0, 64, 64)
+        self.assertEqual(len(pixels), 64 * 64 * 4)
+
+    def test_a_compression_bomb_is_refused(self):
+        client = self.make_client()
+        bomb = zlib.compress(b"\x00" * 50_000_000, 9)
+        self.assertLess(len(bomb), 100_000, "test bomb is not actually compressed")
+        with self.assertRaises(RFBError) as caught:
+            client._decode_zrle(0, 0, 64, 64, bomb)
+        self.assertIn("expanded past", str(caught.exception))
+
+    def test_a_rectangle_outside_the_framebuffer_is_refused(self):
+        """Slice assignment past the end grows the bytearray QImage points into."""
+        client = self.make_client()
+        original = len(client.framebuffer)
+        for x, y, w, h in ((WIDTH - 5, 0, 10, 10),      # off the right edge
+                           (0, HEIGHT - 5, 10, 10),     # off the bottom
+                           (0, 0, WIDTH + 1, 1),        # wider than the screen
+                           (0, 0, 1, HEIGHT + 1)):      # taller than the screen
+            with self.subTest(rect=(x, y, w, h)):
+                with self.assertRaises(RFBError):
+                    client._blit(x, y, w, h, bytes(w * h * 4))
+                self.assertEqual(len(client.framebuffer), original,
+                                 "framebuffer was resized under the view")
+
+    def test_a_valid_rectangle_at_the_edge_still_works(self):
+        client = self.make_client()
+        client._blit(WIDTH - 10, HEIGHT - 10, 10, 10, bytes(10 * 10 * 4))
+        self.assertEqual(len(client.framebuffer), WIDTH * HEIGHT * 4)
+
+    def test_a_bad_palette_index_is_a_protocol_error(self):
+        tile = bytearray([130])          # palette RLE, 2 entries
+        tile += bytes((1, 2, 3)) + bytes((4, 5, 6))
+        tile.append(9)                   # index 9 into a 2-entry palette
+        client = self.make_client()
+        with self.assertRaises(RFBError):
+            client._read_tile(bytes(tile), 0, 8, 8)
+
+    def test_truncated_tile_data_is_a_protocol_error(self):
+        client = self.make_client()
+        # Claims a 64x64 raw tile but supplies almost none of it.
+        payload = zlib.compress(bytes([0]) + b"\x01\x02\x03" * 4)
+        with self.assertRaises(RFBError) as caught:
+            client._decode_zrle(0, 0, 64, 64, payload)
+        self.assertIn("ZRLE", str(caught.exception))
 
 
 class DamageBoundsTest(unittest.TestCase):

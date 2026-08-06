@@ -76,6 +76,15 @@ in priority order. The full list lives in [TODO.md](TODO.md) §1.
 
 ## What is checked
 
+Framebuffer updates are validated before they touch memory. A rectangle that
+falls outside the framebuffer is refused rather than written — slice assignment
+past the end of a `bytearray` extends it, and QImage holds a raw pointer into
+that buffer, so an unchecked rectangle could reallocate it underneath the view.
+ZRLE run lengths are clamped to the tile they belong to, and decompression is
+capped at a size derived from the rectangle, so neither a runaway run nor a
+compression bomb can spend arbitrary memory. Malformed tiles end the session
+with a protocol error.
+
 The Diffie-Hellman group offered for ARD authentication is validated before the
 password is encrypted under a key derived from it. The client refuses a prime
 below 1024 bits, a composite modulus (Miller-Rabin), a generator outside
