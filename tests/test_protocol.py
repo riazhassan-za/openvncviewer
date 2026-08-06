@@ -314,7 +314,7 @@ class HandshakeRaceTest(unittest.TestCase):
         failure = []
         client = RFBClient("127.0.0.1", server.port, USERNAME, PASSWORD,
                            on_resize=lambda w, h: None,
-                           on_damage=damaged.set,
+                           on_damage=lambda *bounds: damaged.set(),
                            on_disconnect=lambda reason: failure.append(reason))
         client.start()
 
@@ -342,6 +342,42 @@ class HandshakeRaceTest(unittest.TestCase):
         self.assertEqual(bytes(client.framebuffer), bytes(server.reference.data))
 
 
+class DamageBoundsTest(unittest.TestCase):
+    """The view repaints only what changed, so the bounds must be right."""
+
+    def test_reports_the_union_of_every_rect_in_the_update(self):
+        server = FakeMacServer()
+        server.start()
+
+        reported = []
+        damaged = threading.Event()
+
+        def on_damage(x, y, w, h):
+            reported.append((x, y, w, h))
+            damaged.set()
+
+        client = RFBClient("127.0.0.1", server.port, USERNAME, PASSWORD,
+                           on_resize=lambda w, h: None,
+                           on_damage=on_damage,
+                           on_disconnect=lambda reason: None)
+        client.start()
+        self.assertTrue(damaged.wait(20), "no damage reported")
+        client.stop()
+
+        # The fake server sends a full-screen raw rect, a ZRLE rect at (10,20)
+        # and a copyrect at (150,80): the union is the whole framebuffer.
+        self.assertEqual(reported[0], (0, 0, WIDTH, HEIGHT))
+
+    def test_union_covers_every_corner(self):
+        from openvncviewer.rfb import _union
+        self.assertEqual(_union(None, 5, 6, 10, 10), (5, 6, 10, 10))
+        # Disjoint rects: the box must span both, not just the newer one.
+        self.assertEqual(_union((5, 6, 10, 10), 100, 200, 4, 4),
+                         (5, 6, 99, 198))
+        # A rect wholly inside the current box must not shrink it.
+        self.assertEqual(_union((0, 0, 50, 50), 10, 10, 5, 5), (0, 0, 50, 50))
+
+
 class StoppedClientTest(unittest.TestCase):
     def test_stopped_client_never_reports_a_disconnect(self):
         """Reconnecting stops the old client; its dying callback must not fire.
@@ -357,7 +393,7 @@ class StoppedClientTest(unittest.TestCase):
         client = RFBClient(
             "127.0.0.1", server.port, USERNAME, PASSWORD,
             on_resize=lambda w, h: (events.append("resize"), resized.set()),
-            on_damage=lambda: events.append("damage"),
+            on_damage=lambda *bounds: events.append("damage"),
             on_disconnect=lambda reason: events.append("disconnect"),
         )
         client.start()
@@ -380,7 +416,7 @@ class ProtocolTest(unittest.TestCase):
         client = RFBClient(
             "127.0.0.1", server.port, USERNAME, PASSWORD,
             on_resize=lambda w, h: resized.append((w, h)),
-            on_damage=damaged.set,
+            on_damage=lambda *bounds: damaged.set(),
             on_disconnect=lambda reason: failure.append(reason),
         )
         client.start()

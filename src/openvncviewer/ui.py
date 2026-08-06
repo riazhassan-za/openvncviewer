@@ -15,8 +15,9 @@
 # with this program. If not, see <https://www.gnu.org/licenses/>.
 """Qt user interface: a remote view that always scales to the window size."""
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF, Qt, QTimer,
+                            Signal)
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QSlider, QSpinBox,
@@ -52,6 +53,10 @@ WHEEL_SPEED_DEFAULT = (WHEEL_SPEED_MIN + WHEEL_SPEED_MAX) // 2
 # cap the top of the slider instead of just catching runaway flicks.
 WHEEL_CLICK_LIMIT = 500
 
+# RFB has no motion compression, so every mouse-move event becomes a message on
+# the wire. Coalesce them to roughly one frame's worth.
+POINTER_INTERVAL_MS = 16
+
 
 def _keysym(event):
     key = event.key()
@@ -72,7 +77,7 @@ class ClientSignals(QObject):
     """Moves RFBClient callbacks from the network thread onto the UI thread."""
 
     resized = Signal(int, int)
-    damaged = Signal()
+    damaged = Signal(int, int, int, int)
     disconnected = Signal(object)
 
 
@@ -85,21 +90,30 @@ class RemoteView(QWidget):
         # our event() override, which reads these attributes.
         self._client = None
         self._image = None
+        self._scaled = None
         self._buttons = 0
         self._pressed = {}
+        self._pending_motion = None
         self.wheel_speed = WHEEL_SPEED_DEFAULT
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setAutoFillBackground(False)
 
+        self._motion_timer = QTimer(self)
+        self._motion_timer.setInterval(POINTER_INTERVAL_MS)
+        self._motion_timer.timeout.connect(self._flush_motion)
+
     def attach(self, client):
         self._client = client
         self._image = None
+        self._scaled = None
         self._pressed.clear()
         self._buttons = 0
 
     def detach(self):
         self._client = None
+        self._motion_timer.stop()
+        self._pending_motion = None
 
     def on_resize(self, width, height):
         if self._client is None:
@@ -108,8 +122,13 @@ class RemoteView(QWidget):
         # to that bytearray show up on the next repaint.
         self._image = QImage(self._client.framebuffer, width, height,
                              width * 4, QImage.Format_RGB32)
+        self._scaled = None
         self.updateGeometry()
         self.update()
+
+    def resizeEvent(self, event):
+        self._scaled = None  # widget size changed, so the cache is the wrong size
+        super().resizeEvent(event)
 
     def sizeHint(self):
         return self._image.size() if self._image else super().sizeHint()
@@ -127,12 +146,62 @@ class RemoteView(QWidget):
         return QRect((self.width() - width) // 2, (self.height() - height) // 2,
                      width, height)
 
+    def _rescale(self, region=None):
+        """Refresh the cached scaled pixmap; return the widget rect to repaint.
+
+        Smooth-scaling the whole desktop on every frame is the expensive part
+        of painting, and almost all of it is redundant when a few hundred
+        pixels changed. With a region only that part is rescaled into the
+        cache, so a blinking cursor costs a tile, not a full screen.
+        """
+        target = self.target_rect()
+        if self._image is None or self._image.isNull() or target.isEmpty():
+            self._scaled = None
+            return None
+
+        if self._scaled is None or self._scaled.size() != target.size():
+            self._scaled = QPixmap(target.size())
+            region = None  # nothing valid to keep, so rebuild it all
+
+        if region is None:
+            source = QRectF(self._image.rect())
+        else:
+            x, y, w, h = region
+            # A pixel of margin so the smooth filter sees the same neighbours
+            # it would during a full rescale, which keeps seams from showing.
+            left, top = max(0, x - 1), max(0, y - 1)
+            right = min(self._image.width(), x + w + 1)
+            bottom = min(self._image.height(), y + h + 1)
+            if right <= left or bottom <= top:
+                return None
+            source = QRectF(left, top, right - left, bottom - top)
+
+        scale_x = target.width() / self._image.width()
+        scale_y = target.height() / self._image.height()
+        destination = QRectF(source.x() * scale_x, source.y() * scale_y,
+                             source.width() * scale_x, source.height() * scale_y)
+
+        painter = QPainter(self._scaled)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.drawImage(destination, self._image, source)
+        painter.end()
+
+        return (destination.toAlignedRect()
+                .translated(target.topLeft())
+                .adjusted(-1, -1, 1, 1))
+
+    def on_damage(self, x, y, w, h):
+        dirty = self._rescale((x, y, w, h))
+        self.update() if dirty is None else self.update(dirty)
+
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(24, 24, 24))
-        if self._image and not self._image.isNull():
-            painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            painter.drawImage(self.target_rect(), self._image, self._image.rect())
+        painter.fillRect(event.rect(), QColor(24, 24, 24))
+        if self._scaled is None:
+            self._rescale()
+        if self._scaled is not None:
+            # Already at widget scale, so this is a blit rather than a resample.
+            painter.drawPixmap(self.target_rect().topLeft(), self._scaled)
 
     # ----------------------------------------------------------------- input
 
@@ -152,16 +221,34 @@ class RemoteView(QWidget):
             self._client.send_pointer(point.x(), point.y(), self._buttons)
 
     def mouseMoveEvent(self, event):
-        self._send_pointer(event.position())
+        # Send the first move straight away so tracking feels immediate, then
+        # coalesce the rest: only the newest position matters, and the ones in
+        # between would just be wire traffic the server has to work through.
+        self._pending_motion = event.position()
+        if not self._motion_timer.isActive():
+            self._flush_motion()
+            self._motion_timer.start()
+
+    def _flush_motion(self):
+        if self._pending_motion is None:
+            self._motion_timer.stop()
+            return
+        position, self._pending_motion = self._pending_motion, None
+        self._send_pointer(position)
+
+    def _send_now(self, position):
+        """Button changes must not be reordered behind a coalesced move."""
+        self._pending_motion = None
+        self._send_pointer(position)
 
     def mousePressEvent(self, event):
         self.setFocus()
         self._buttons |= BUTTONS.get(event.button(), 0)
-        self._send_pointer(event.position())
+        self._send_now(event.position())
 
     def mouseReleaseEvent(self, event):
         self._buttons &= ~BUTTONS.get(event.button(), 0)
-        self._send_pointer(event.position())
+        self._send_now(event.position())
 
     def wheel_clicks(self, delta):
         """How many scroll clicks one wheel event should send.
@@ -300,7 +387,7 @@ class MainWindow(QMainWindow):
         self.client = None
         self.signals = ClientSignals()
         self.signals.resized.connect(self._on_resize)
-        self.signals.damaged.connect(self.view.update)
+        self.signals.damaged.connect(self.view.on_damage)
         self.signals.disconnected.connect(self._on_disconnect)
 
         file_menu = self.menuBar().addMenu("&File")

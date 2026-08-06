@@ -246,6 +246,7 @@ class RFBClient:
     def _handle_framebuffer_update(self):
         count = struct.unpack("!xH", self._read(3))[0]
         resized = False
+        damage = None
         for _ in range(count):
             x, y, w, h, encoding = struct.unpack("!HHHHi", self._read(12))
             if encoding == ENC_RAW:
@@ -258,20 +259,32 @@ class RFBClient:
             elif encoding == ENC_DESKTOP_SIZE:
                 self._resize(w, h)
                 resized = True
+                continue
             else:
                 raise RFBError(f"server used unrequested encoding {encoding}")
+            # Report what actually changed so the view can repaint just that
+            # much instead of rescaling the whole desktop.
+            damage = _union(damage, x, y, w, h)
 
         if resized:
             self.request_update(incremental=False)
-        else:
-            self._on_damage()
-            self.request_update(incremental=True)
+            return
+        if damage is not None:
+            self._on_damage(*damage)
+        self.request_update(incremental=True)
 
     def _blit(self, x, y, w, h, pixels):
-        """Copy a w*h block of BGRX pixels into the framebuffer at (x, y)."""
+        """Copy a w*h block of BGRX pixels into the framebuffer at (x, y).
+
+        A full-width block is contiguous in both buffers, so it looks like it
+        should move in a single copy - but measured on a 3420x2214 frame that
+        is 8.0ms against 3.4ms for the loop below, consistently. Copying in
+        row-sized pieces stays in cache; one 30MB memcpy does not. See
+        benchmarks/decode.py.
+        """
         stride = self.width * BYTES_PER_PIXEL
-        row_len = w * BYTES_PER_PIXEL
         fb = self.framebuffer
+        row_len = w * BYTES_PER_PIXEL
         for row in range(h):
             start = (y + row) * stride + x * BYTES_PER_PIXEL
             fb[start:start + row_len] = pixels[row * row_len:(row + 1) * row_len]
@@ -293,15 +306,15 @@ class RFBClient:
 
     def _decode_zrle(self, x, y, w, h, data):
         raw = self._zrle.decompress(data)
-        out = bytearray(w * h * BYTES_PER_PIXEL)
         pos = 0
         for tile_y in range(0, h, 64):
             th = min(64, h - tile_y)
             for tile_x in range(0, w, 64):
                 tw = min(64, w - tile_x)
                 pixels, pos = self._read_tile(raw, pos, tw, th)
-                self._place_tile(out, w, tile_x, tile_y, tw, th, pixels)
-        self._blit(x, y, w, h, out)
+                # Straight into the framebuffer. Staging the whole rect in a
+                # scratch buffer first meant copying every pixel twice.
+                self._blit(x + tile_x, y + tile_y, tw, th, pixels)
 
     def _read_tile(self, raw, pos, tw, th):
         """Return (tile pixels as tw*th*4 bytes, new position)."""
@@ -322,18 +335,32 @@ class RFBClient:
             bits = 1 if sub == 2 else (2 if sub <= 4 else 4)
             row_bytes = (tw * bits + 7) // 8
             mask = (1 << bits) - 1
-            pixels = []
+            shifts = tuple(range(8 - bits, -1, -bits))
+            # The spare bits at the end of a row are padding and may hold any
+            # value, so every index the mask can produce must be addressable.
+            # The old per-pixel loop stopped at the tile width and never looked
+            # at them; expanding a whole byte at a time does.
+            palette += [palette[0]] * ((1 << bits) - len(palette))
+            # Unpacking a byte yields the same pixels every time that byte
+            # appears, and a 64x64 tile drawn from <=16 colours repeats bytes
+            # heavily. Memoising per tile turns the per-pixel loop into one
+            # dict lookup per byte, which is where nearly all the time went.
+            expanded = {}
+            row_width = tw * BYTES_PER_PIXEL
+            rows = []
             for row in range(th):
                 base = pos + row * row_bytes
-                col = 0
-                for offset in range(row_bytes):
-                    byte = raw[base + offset]
-                    for shift in range(8 - bits, -1, -bits):
-                        if col >= tw:
-                            break
-                        pixels.append(palette[(byte >> shift) & mask])
-                        col += 1
-            return b"".join(pixels), pos + row_bytes * th
+                chunks = []
+                for byte in raw[base:base + row_bytes]:
+                    chunk = expanded.get(byte)
+                    if chunk is None:
+                        chunk = expanded[byte] = b"".join(
+                            palette[(byte >> shift) & mask] for shift in shifts)
+                    chunks.append(chunk)
+                # The final byte of a row can hold more pixels than the tile is
+                # wide; trim the overhang.
+                rows.append(b"".join(chunks)[:row_width])
+            return b"".join(rows), pos + row_bytes * th
 
         if sub == 128:  # plain RLE
             pixels = []
@@ -366,14 +393,6 @@ class RFBClient:
 
         raise RFBError(f"invalid ZRLE subencoding {sub}")
 
-    @staticmethod
-    def _place_tile(out, rect_w, tile_x, tile_y, tw, th, pixels):
-        stride = rect_w * BYTES_PER_PIXEL
-        row_len = tw * BYTES_PER_PIXEL
-        for row in range(th):
-            start = (tile_y + row) * stride + tile_x * BYTES_PER_PIXEL
-            out[start:start + row_len] = pixels[row * row_len:(row + 1) * row_len]
-
     # ---------------------------------------------------------- client events
 
     def request_update(self, incremental=True):
@@ -389,18 +408,36 @@ class RFBClient:
             self._send(struct.pack("!BB2xI", 4, 1 if down else 0, keysym))
 
 
+def _union(current, x, y, w, h):
+    """Bounding box of the damage so far and one more rectangle."""
+    if current is None:
+        return (x, y, w, h)
+    cx, cy, cw, ch = current
+    left, top = min(cx, x), min(cy, y)
+    right, bottom = max(cx + cw, x + w), max(cy + ch, y + h)
+    return (left, top, right - left, bottom - top)
+
+
 def _cpixel(raw, pos):
     """A ZRLE compressed pixel (3 bytes BGR) widened to 4-byte BGRX."""
     return raw[pos:pos + 3] + b"\xff"
 
 
 def _expand_cpixels(data, count):
-    """Widen a run of 3-byte CPIXELs to 4-byte BGRX using C-speed slicing."""
-    out = bytearray(b"\xff" * (count * 4))
+    """Widen a run of 3-byte CPIXELs to 4-byte BGRX using C-speed slicing.
+
+    The X byte is set to 0xFF to match every other decode path. Format_RGB32
+    ignores it, so leaving it at zero renders identically - but it makes the
+    framebuffer differ byte-for-byte depending on which encoding painted a
+    pixel, which defeats exact comparison in the tests. Returned as a bytearray
+    because the caller only slices it.
+    """
+    out = bytearray(count * 4)
     out[0::4] = data[0::3]
     out[1::4] = data[1::3]
     out[2::4] = data[2::3]
-    return bytes(out)
+    out[3::4] = b"\xff" * count
+    return out
 
 
 def _read_run_length(raw, pos):
