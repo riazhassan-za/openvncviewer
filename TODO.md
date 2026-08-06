@@ -152,8 +152,15 @@ claiming any change here is an improvement.
   configurable, and no key-remapping UI exists.
 - [ ] There is no way to send Ctrl-Alt-Del, Command-Tab, or other combinations
   that the local window manager swallows before Qt sees them.
-- [ ] No keyboard grab / full-screen mode, so some shortcuts always go to
-  Windows rather than the Mac.
+- [ ] **No keyboard grab.** Full-screen mode exists (section 6), but Windows
+  still intercepts Alt+Tab, the Windows key and Ctrl+Alt+Del before Qt sees
+  them, so `Cmd+Tab` on the Mac stays unreachable. Fixing it needs a low-level
+  `WH_KEYBOARD_LL` hook: Windows-specific, easy to strand the user with no way
+  out of full screen, and liable to trip antivirus heuristics on an unsigned
+  binary. Deliberately deferred rather than forgotten.
+- [ ] F11 is reserved for the full-screen toggle and is the one key never
+  forwarded to the remote. Making the shortcut configurable would remove even
+  that exception.
 - [ ] Horizontal scroll is mapped to buttons 6/7 but has not been verified
   against a real trackpad.
 
@@ -166,7 +173,9 @@ claiming any change here is an improvement.
   other than 100%, the mapping in `RemoteView._remote_point` uses logical
   pixels; whether clicks land correctly at 150%/200% has not been checked.
   This matters more than usual given scaling is the headline feature.
-- [ ] No full-screen mode.
+- [x] Full-screen mode via **View → Full screen** or **F11**, hiding the menu
+  and status bars. Restores a maximized window as maximized, and releases held
+  keys on toggle so a modifier cannot stick on the remote.
 - [ ] Connection details are not remembered between runs — no recent-hosts
   list, no bookmarks, no config file.
 - [ ] Errors surface as a modal `QMessageBox` with the raw exception text.

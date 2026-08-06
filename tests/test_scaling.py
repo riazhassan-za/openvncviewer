@@ -6,12 +6,14 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
-from PySide6.QtGui import QImage, QMouseEvent, QWheelEvent  # noqa: E402
+from PySide6.QtGui import (QImage, QKeySequence, QMouseEvent,  # noqa: E402
+                           QWheelEvent)
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from openvncviewer.ui import (WHEEL_CLICK_LIMIT, WHEEL_NOTCH,  # noqa: E402
                               WHEEL_SPEED_DEFAULT, WHEEL_SPEED_MAX,
-                              WHEEL_SPEED_MIN, ConnectDialog, RemoteView)
+                              WHEEL_SPEED_MIN, ConnectDialog, MainWindow,
+                              RemoteView)
 
 REMOTE_W, REMOTE_H = 200, 120  # 5:3
 BACKGROUND = (24, 24, 24)
@@ -299,6 +301,73 @@ class PointerCoalescingTest(unittest.TestCase):
         x, y, mask = client.pointer_events[-1]
         self.assertEqual((x, y, mask), (80, 60, 1))
         self.assertIsNone(view._pending_motion)
+
+
+class FullScreenTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_window(self):
+        window = MainWindow()
+        window.view.attach(StubClient(REMOTE_W, REMOTE_H))
+        window.view.on_resize(REMOTE_W, REMOTE_H)
+        return window
+
+    def test_chrome_is_hidden_and_restored(self):
+        window = self.make_window()
+        window.show()
+        self.assertTrue(window.menuBar().isVisible())
+
+        window.fullscreen_action.setChecked(True)
+        self.assertFalse(window.menuBar().isVisible())
+        self.assertFalse(window.statusBar().isVisible())
+
+        window.fullscreen_action.setChecked(False)
+        self.assertTrue(window.menuBar().isVisible())
+        self.assertTrue(window.statusBar().isVisible())
+        window.close()
+
+    def test_window_state_toggles(self):
+        window = self.make_window()
+        window.show()
+        window.fullscreen_action.setChecked(True)
+        self.assertTrue(window.isFullScreen())
+        window.fullscreen_action.setChecked(False)
+        self.assertFalse(window.isFullScreen())
+        window.close()
+
+    def test_leaving_full_screen_restores_a_maximized_window(self):
+        window = self.make_window()
+        window.showMaximized()
+        window.fullscreen_action.setChecked(True)
+        window.fullscreen_action.setChecked(False)
+        self.assertTrue(window.isMaximized(),
+                        "a maximized window came back as a normal one")
+        window.close()
+
+    def test_f11_is_the_shortcut_and_the_window_owns_it(self):
+        window = self.make_window()
+        self.assertEqual(window.fullscreen_action.shortcut(),
+                         QKeySequence(Qt.Key_F11))
+        # Owned by the window, not just the menu, or F11 would stop working
+        # the moment the menu bar is hidden.
+        self.assertIn(window.fullscreen_action, window.actions())
+        window.close()
+
+    def test_held_keys_are_released_on_toggle(self):
+        """Otherwise a modifier held while toggling stays stuck on the Mac."""
+        window = self.make_window()
+        window.show()
+        sent = []
+        window.view._client.send_key = lambda keysym, down: sent.append(
+            (keysym, down))
+        window.view._pressed[Qt.Key_Shift] = 0xFFE1
+
+        window.fullscreen_action.setChecked(True)
+        self.assertIn((0xFFE1, False), sent)
+        self.assertEqual(window.view._pressed, {})
+        window.close()
 
 
 class ConnectDialogTest(unittest.TestCase):
