@@ -26,6 +26,7 @@ import struct
 import threading
 import zlib
 
+from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 SEC_NONE = 1
@@ -71,6 +72,24 @@ class RFBError(Exception):
 
 def _ignore(*args):
     """Callback stand-in for a client that has been stopped."""
+
+
+def _reverse_bits(byte):
+    byte = ((byte & 0xF0) >> 4) | ((byte & 0x0F) << 4)
+    byte = ((byte & 0xCC) >> 2) | ((byte & 0x33) << 2)
+    return ((byte & 0xAA) >> 1) | ((byte & 0x55) << 1)
+
+
+def _vnc_auth_key(password):
+    """The DES key for VNC authentication.
+
+    The password is truncated to 8 bytes and null-padded, then each byte has
+    its bits reversed - a quirk of the original implementation that every VNC
+    server has reproduced ever since. Anything past the eighth character is
+    silently ignored, by the scheme, not by us.
+    """
+    raw = password.encode("utf-8")[:8].ljust(8, b"\x00")
+    return bytes(_reverse_bits(byte) for byte in raw)
 
 
 def _pack_credential(text):
@@ -189,6 +208,8 @@ class RFBClient:
     def _authenticate(self, proto):
         if proto == 3:
             sec_type = struct.unpack("!I", self._read(4))[0]
+            if sec_type == 0:
+                raise RFBError(self._read_failure_reason())
             offered = [sec_type]
         else:
             count = self._read(1)[0]
@@ -196,23 +217,59 @@ class RFBClient:
                 raise RFBError(self._read_failure_reason())
             offered = list(self._read(count))
 
-        if SEC_ARD in offered:
-            self._send(bytes([SEC_ARD]))
-            self._auth_ard()
-        elif SEC_NONE in offered:
-            if proto != 3:
-                self._send(bytes([SEC_NONE]))
-        else:
-            raise RFBError(
-                "server does not offer macOS user authentication (security types "
-                f"{offered}). In System Settings > General > Sharing > Screen "
-                "Sharing, allow access for your user account."
-            )
+        chosen = self._choose_security(offered)
+        # Under 3.3 the server dictates the type rather than offering a list,
+        # so there is nothing to send back.
+        if proto != 3:
+            self._send(bytes([chosen]))
 
-        if proto == 8 or (proto == 7 and SEC_ARD in offered):
+        if chosen == SEC_ARD:
+            self._auth_ard()
+        elif chosen == SEC_VNC:
+            self._auth_vnc()
+
+        # 3.8 always sends SecurityResult, including after "none". Older
+        # versions send it only where authentication actually happened.
+        if proto == 8 or chosen != SEC_NONE:
             if struct.unpack("!I", self._read(4))[0] != 0:
                 raise RFBError(self._read_failure_reason() if proto == 8
-                               else "authentication failed")
+                               else "authentication failed - check the password")
+
+    def _choose_security(self, offered):
+        """Pick the strongest scheme we can actually satisfy.
+
+        ARD carries a real account name and is preferred whenever one was
+        given. Otherwise fall back to the legacy VNC password, then to no
+        authentication at all.
+        """
+        if SEC_ARD in offered and self.username:
+            return SEC_ARD
+        if SEC_VNC in offered and self.password:
+            return SEC_VNC
+        if SEC_NONE in offered:
+            return SEC_NONE
+        # Nothing matched the credentials supplied. Take whatever we can speak
+        # and let the server explain, rather than guessing on the user's behalf.
+        for fallback in (SEC_ARD, SEC_VNC):
+            if fallback in offered:
+                return fallback
+        raise RFBError(
+            f"no authentication type this client supports (server offers "
+            f"{offered}). Supported: 30 (macOS account), 2 (VNC password), "
+            "1 (none). On a Mac, enable Screen Sharing and allow access for "
+            "your user account.")
+
+    def _auth_vnc(self):
+        """Legacy VNC authentication: DES challenge-response.
+
+        Weak and unavoidably so - the password is capped at 8 characters by the
+        scheme itself, and single DES with a 56-bit key is long broken. It is
+        here because most non-Apple servers offer nothing else.
+        """
+        challenge = self._read(16)
+        encryptor = Cipher(TripleDES(_vnc_auth_key(self.password) * 3),
+                           modes.ECB()).encryptor()
+        self._send(encryptor.update(challenge) + encryptor.finalize())
 
     def _read_failure_reason(self):
         length = struct.unpack("!I", self._read(4))[0]
