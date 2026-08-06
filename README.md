@@ -87,6 +87,21 @@ Mouse positions are mapped back through the same scale, so clicks land where
 you point at any window size. Clicks in the letterbox area clamp to the nearest
 remote pixel.
 
+## Full screen
+
+**View → Full screen**, or **F11**, hands the whole screen to the remote
+desktop and hides the menu and status bars. F11 brings them back. Nothing is
+renegotiated with the server — the scaler simply gets more room, so the remote
+desktop is drawn larger.
+
+Two things worth knowing:
+
+- **F11 is reserved by the viewer** and is therefore not forwarded to the Mac.
+  It is the only key treated this way.
+- There is **no keyboard grab**, so Windows still intercepts Alt+Tab, the
+  Windows key and Ctrl+Alt+Del even in full screen. `Cmd+Tab` on the Mac is
+  reachable only if Windows does not claim the combination first.
+
 ## Mouse wheel speed
 
 <img src="screenshots/connect-dialog.png" alt="The connect dialog, with the Options group and mouse wheel speed slider" width="640">
