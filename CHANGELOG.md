@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Mouse wheel speed control in the connect dialog, under a new **Options**
+  group. RFB carries no scroll magnitude — a wheel notch is just a button
+  press — so scrolling over a remote session feels sluggish. The slider
+  multiplies the clicks sent per notch, from 1 (the wheel passed through
+  untouched) up to 100, defaulting to 50. A ceiling of 500 clicks per wheel
+  event keeps a fast flick from flooding the server, and is deliberately held
+  above the slider maximum so it cannot quietly cap the top of the range.
+
 ## [0.1.0] - 2026-08-06
 
 First public release.

@@ -21,7 +21,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from . import __version__
-from .ui import MainWindow
+from .ui import WHEEL_SPEED_DEFAULT, MainWindow
 
 DEFAULT_PORT = 5900
 
@@ -45,7 +45,8 @@ def main():
     app.setApplicationVersion(__version__)
 
     window = MainWindow()
-    window.last_connection = (args.host, args.port, args.user)
+    window.last_connection = (args.host, args.port, args.user,
+                              WHEEL_SPEED_DEFAULT)
     window.show()
     window.prompt_connect()
     return app.exec()
