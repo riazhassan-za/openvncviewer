@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- The decoder is hardened against a hostile or broken server. Three problems,
+  each measured before and after:
+
+  - **A framebuffer rectangle outside the framebuffer resized it.** Slice
+    assignment past the end of a `bytearray` extends it rather than failing,
+    and QImage holds a raw pointer into that buffer — so a malformed rectangle
+    reallocated the framebuffer underneath the view. `_blit` now bounds-checks
+    once per call, covering CopyRect sources too.
+  - **A ZRLE run longer than its tile allocated without limit.** 39 KB of input
+    produced 40 MB of pixels, a 1021x amplification. Runs are clamped to the
+    pixels remaining in the tile.
+  - **ZRLE decompression was unbounded.** A 194 KB compression bomb expanded to
+    200 MB. `decompress` is now given a ceiling derived from the rectangle
+    size, and a stream that exceeds it is refused.
+
+  Malformed tiles now raise a protocol error rather than escaping as
+  `IndexError` or `ValueError`. Palette-RLE decoding costs 19.7 Mpx/s against
+  21.7 before, all of it the run clamp and the palette bounds check.
+
 ## [0.5.0] - 2026-08-06
 
 ### Security
