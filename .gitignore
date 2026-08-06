@@ -18,6 +18,9 @@ htmlcov/
 *.manifest
 *.spec.bak
 
+# Scratch files from atomic writes, should a save ever fail mid-flight
+*.tmp
+
 # Editors / OS
 .vscode/
 .idea/

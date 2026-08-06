@@ -6,6 +6,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Recently connected servers are remembered between runs.** The Host box is
+  now a dropdown, most recent first, and a new **Server name** field gives each
+  one a label of your choosing. Selecting a server fills in its name, port and
+  username together — restoring the name alone would leave the previous
+  server's username in the form, which breaks a Mac-then-standard-VNC switch.
+  Typing a host never connected to clears the name.
+
+  The name also appears in the window title and status bar once connected, so
+  several open viewers can be told apart.
+
+  A server is remembered only after it **actually connects**, so typos and
+  unreachable hosts never accumulate. **Remove Server** forgets the one
+  currently shown along with any saved password, then selects the next, so
+  removing three takes three clicks.
+
+  The dialog's accept button now reads **Connect** rather than OK, and the
+  three buttons are ordered Connect, Cancel, Remove Server. They are laid out
+  by hand rather than with `QDialogButtonBox`, which reorders by role per
+  platform and would not honour a fixed order.
+
+  Stored as `servers.json` in the user config directory (`%LOCALAPPDATA%` on
+  Windows, where Qt's `AppConfigLocation` points — not the roaming `%APPDATA%`).
+  Saves are atomic, so a crash mid-write leaves the previous list intact, and a
+  corrupt or hand-edited file is discarded field by field rather than crashing
+  the dialog.
+
+- **Optional saved passwords, off by default.** Ticking *Save password for this
+  server* encrypts the password with Windows DPAPI — keyed to your Windows
+  login — before it is written. Selecting that server later fills the password
+  in and re-ticks the box; unticking and reconnecting forgets it.
+
+  What that protects: the stored blob is useless on another machine or to
+  another user on this one. What it does not: code running as you can call
+  `CryptUnprotectData` exactly as the viewer does, the same property every
+  browser password store has.
+
+  The plaintext never reaches `servers.json`, and the module that writes that
+  file cannot decrypt — it stores an opaque token. Where DPAPI is unavailable
+  the option is **disabled** rather than falling back to a key kept beside the
+  ciphertext, which would be obfuscation rather than encryption.
+
+### Changed
+
+- The viewport is cleared on disconnect, along with the window title. A stale
+  last frame under a title naming the server implies a session that has ended.
+
 ## [0.7.0] - 2026-08-06
 
 ### Added

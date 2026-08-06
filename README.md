@@ -106,6 +106,51 @@ Mouse positions are mapped back through the same scale, so clicks land where
 you point at any window size. Clicks in the letterbox area clamp to the nearest
 remote pixel.
 
+## Recent servers
+
+The **Host** box is a dropdown of servers you have connected to before, most
+recent first. Picking one fills in its **Server name**, port and username —
+restoring all three together, since a leftover username from the previous
+server is exactly what breaks a Mac-then-standard-VNC switch.
+
+**Server name** is a label of your choosing. It appears next to the host in the
+dropdown, and in the window title and status bar once connected, which is what
+makes several open viewers tellable apart. Typing a host you have never
+connected to clears the name, ready for a new one.
+
+A server joins the list only once it has **actually connected**, so typos and
+unreachable hosts never accumulate. **Remove Server** forgets the one currently
+shown, along with any password saved for it, and then selects the next — so
+three servers take three clicks. It is disabled when the host in the box is not
+in the list.
+
+The list lives in `servers.json` under your user config directory —
+`%LOCALAPPDATA%\OpenVNCViewer\` on Windows, which is where Qt's
+`AppConfigLocation` points, **not** the roaming `%APPDATA%`. It holds
+hostnames, ports, usernames and your names for them, and is written
+atomically, so a crash mid-save leaves the previous list intact rather than a
+corrupt file.
+
+### Saving passwords
+
+**Save password for this server** is off by default. Tick it and the password
+is encrypted with **Windows DPAPI**, whose key comes from your Windows login,
+before being written alongside that server. Selecting the server later fills
+the password in and re-ticks the box; unticking and reconnecting forgets it.
+
+Be clear about what that protects:
+
+- The stored blob is **useless on another machine, and useless to another user
+  on this one**. Copying `servers.json` elsewhere gains an attacker nothing.
+- It does **not** protect against code running as you. Anything in your Windows
+  session can call `CryptUnprotectData` exactly as this does. Every browser
+  password store works the same way. If that matters, leave the box unticked.
+
+The plaintext password never reaches `servers.json`, and the module that writes
+that file cannot decrypt anything — it only stores an opaque token. On a
+platform without DPAPI the option is **disabled** rather than falling back to a
+key kept next to the ciphertext, which would be obfuscation, not encryption.
+
 ## Full screen
 
 **View → Full screen**, or **F11**, hands the whole screen to the remote

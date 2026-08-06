@@ -1,7 +1,9 @@
 """Verifies the remote desktop scales to the window and that clicks map back."""
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -10,6 +12,9 @@ from PySide6.QtGui import (QImage, QKeySequence, QMouseEvent,  # noqa: E402
                            QWheelEvent)
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
+import openvncviewer.ui as ui_module  # noqa: E402
+from openvncviewer import secretstore  # noqa: E402
+from openvncviewer.history import ServerHistory  # noqa: E402
 from openvncviewer.ui import (WHEEL_CLICK_LIMIT, WHEEL_NOTCH,  # noqa: E402
                               WHEEL_SPEED_DEFAULT, WHEEL_SPEED_MAX,
                               WHEEL_SPEED_MIN, DONATION_ADDRESS,
@@ -101,6 +106,36 @@ class ScalingTest(unittest.TestCase):
         self.assertEqual(rgb(200, 10), BACKGROUND)           # letterbox above
         self.assertEqual(rgb(200, 390), BACKGROUND)          # letterbox below
         self.assertEqual(rgb(5, 200), (0xC0, 0x80, 0x40))    # image spans full width
+
+    def test_detaching_clears_the_viewport(self):
+        """A stale last frame after disconnect implies a session that is gone."""
+        view, _ = self.make_view()
+        view.resize(400, 400)
+        view._rescale()
+        self.assertIsNotNone(view._image)
+        self.assertIsNotNone(view._scaled)
+
+        view.detach()
+        self.assertIsNone(view._image)
+        self.assertIsNone(view._scaled)
+        self.assertTrue(view.target_rect().isEmpty())
+
+        target = QImage(400, 400, QImage.Format_RGB32)
+        target.fill(0xFFFF0000)  # red, so leftover remote pixels would show
+        view.render(target)
+        for point in ((200, 200), (5, 5), (395, 395)):
+            with self.subTest(point=point):
+                colour = target.pixelColor(*point)
+                self.assertEqual((colour.red(), colour.green(), colour.blue()),
+                                 BACKGROUND, "remote image still on screen")
+
+    def test_detaching_drops_held_buttons_and_keys(self):
+        view, _ = self.make_view()
+        view._pressed[Qt.Key_Shift] = 0xFFE1
+        view._buttons = 1
+        view.detach()
+        self.assertEqual(view._pressed, {})
+        self.assertEqual(view._buttons, 0)
 
     def test_framebuffer_writes_show_up_without_recreating_the_image(self):
         view, client = self.make_view()
@@ -435,22 +470,329 @@ class AboutDialogTest(unittest.TestCase):
         window.close()
 
 
+class RecentServersTest(unittest.TestCase):
+    """The dropdown, the linked Server name box, and clearing the list."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.history = ServerHistory(Path(self.directory.name) / "servers.json")
+        self.history.remember("192.168.0.8", 5900, "someone", "Studio Mac")
+        self.history.remember("vnc.example.com", 5901, "", "")
+
+    def dialog(self, host=""):
+        return ConnectDialog(host, 5900, "", WHEEL_SPEED_DEFAULT,
+                             history=self.history)
+
+    def test_dropdown_lists_recent_servers_newest_first(self):
+        dialog = self.dialog()
+        labels = [dialog.host.itemText(i) for i in range(dialog.host.count())]
+        self.assertEqual(labels, ["vnc.example.com", "Studio Mac — 192.168.0.8"])
+
+    def test_the_host_is_the_item_data_not_the_decorated_label(self):
+        dialog = self.dialog()
+        hosts = [dialog.host.itemData(i) for i in range(dialog.host.count())]
+        self.assertEqual(hosts, ["vnc.example.com", "192.168.0.8"])
+
+    def test_selecting_a_server_fills_its_details(self):
+        dialog = self.dialog()
+        dialog.host.setEditText("192.168.0.8")
+        self.assertEqual(dialog.server_name.text(), "Studio Mac")
+        self.assertEqual(dialog.port.value(), 5900)
+        self.assertEqual(dialog.username.text(), "someone")
+
+    def test_switching_servers_replaces_the_previous_details(self):
+        """Stale username from the previous server would break a mixed setup."""
+        dialog = self.dialog("192.168.0.8")
+        self.assertEqual(dialog.username.text(), "someone")
+        dialog.host.setEditText("vnc.example.com")
+        self.assertEqual(dialog.server_name.text(), "")
+        self.assertEqual(dialog.port.value(), 5901)
+        self.assertEqual(dialog.username.text(), "")
+
+    def test_an_unseen_host_clears_the_name(self):
+        dialog = self.dialog("192.168.0.8")
+        self.assertEqual(dialog.server_name.text(), "Studio Mac")
+        dialog.host.setEditText("brand.new.host")
+        self.assertEqual(dialog.server_name.text(), "")
+
+    def test_picking_from_the_dropdown_puts_the_host_in_the_box(self):
+        dialog = self.dialog()
+        dialog.host.setCurrentIndex(1)
+        dialog._history_selected(1)
+        self.assertEqual(dialog.host.currentText(), "192.168.0.8")
+        self.assertEqual(dialog.values()[0], "192.168.0.8")
+
+    def test_values_include_the_server_name(self):
+        dialog = self.dialog("192.168.0.8")
+        dialog.password.setText("secret")
+        host, port, username, password, wheel, name, save = dialog.values()
+        self.assertEqual((host, port, username, password, name),
+                         ("192.168.0.8", 5900, "someone", "secret", "Studio Mac"))
+        self.assertFalse(save, "nothing was saved for this server")
+
+    def test_a_saved_password_is_restored_and_the_box_ticked(self):
+        if not secretstore.available():
+            self.skipTest("no encryption backend on this platform")
+        self.history.remember("192.168.0.8", 5900, "someone", "Studio Mac",
+                              password=secretstore.encrypt("hunter2"))
+        dialog = self.dialog("192.168.0.8")
+        self.assertEqual(dialog.password.text(), "hunter2")
+        self.assertTrue(dialog.save_password.isChecked())
+
+    def test_switching_to_a_server_without_a_saved_password_clears_it(self):
+        if not secretstore.available():
+            self.skipTest("no encryption backend on this platform")
+        self.history.remember("192.168.0.8", 5900, "someone", "Studio Mac",
+                              password=secretstore.encrypt("hunter2"))
+        dialog = self.dialog("192.168.0.8")
+        self.assertEqual(dialog.password.text(), "hunter2")
+
+        dialog.host.setEditText("vnc.example.com")
+        self.assertEqual(dialog.password.text(), "",
+                         "the previous server's password stayed in the box")
+        self.assertFalse(dialog.save_password.isChecked())
+
+    def test_an_unreadable_token_is_treated_as_no_saved_password(self):
+        """A blob written by another user or machine must not half-fill the form."""
+        self.history.remember("192.168.0.8", 5900, "someone", "Studio Mac",
+                              password="AQAAgibberish==")
+        dialog = self.dialog("192.168.0.8")
+        self.assertEqual(dialog.password.text(), "")
+        self.assertFalse(dialog.save_password.isChecked())
+
+    def test_ticking_the_box_stores_an_encrypted_token_not_the_password(self):
+        if not secretstore.available():
+            self.skipTest("no encryption backend on this platform")
+        window = self.make_window()
+        window.connect_to("new.host", 5900, "user", "hunter2",
+                          WHEEL_SPEED_DEFAULT, "Fresh", save_password=True)
+        window._on_resize(REMOTE_W, REMOTE_H)
+
+        entry = self.history.find("new.host")
+        self.assertTrue(entry["password"], "nothing was saved")
+        self.assertNotIn("hunter2", entry["password"])
+        self.assertNotIn("hunter2",
+                         self.history.path.read_text(encoding="utf-8"))
+        self.assertEqual(secretstore.decrypt(entry["password"]), "hunter2")
+
+    def test_leaving_the_box_unticked_stores_no_password(self):
+        window = self.make_window()
+        window.connect_to("new.host", 5900, "user", "hunter2",
+                          WHEEL_SPEED_DEFAULT, "Fresh", save_password=False)
+        window._on_resize(REMOTE_W, REMOTE_H)
+
+        self.assertEqual(self.history.find("new.host")["password"], "")
+        self.assertNotIn("hunter2",
+                         self.history.path.read_text(encoding="utf-8"))
+
+    def test_unticking_later_forgets_a_previously_saved_password(self):
+        if not secretstore.available():
+            self.skipTest("no encryption backend on this platform")
+        window = self.make_window()
+        window.connect_to("new.host", 5900, "user", "hunter2",
+                          WHEEL_SPEED_DEFAULT, "Fresh", save_password=True)
+        window._on_resize(REMOTE_W, REMOTE_H)
+        self.assertTrue(self.history.find("new.host")["password"])
+
+        window.connect_to("new.host", 5900, "user", "hunter2",
+                          WHEEL_SPEED_DEFAULT, "Fresh", save_password=False)
+        window._on_resize(REMOTE_W, REMOTE_H)
+        self.assertEqual(self.history.find("new.host")["password"], "",
+                         "unticking did not forget the stored password")
+
+    def test_the_buttons_read_connect_cancel_remove_in_that_order(self):
+        dialog = self.dialog()
+        self.assertEqual(dialog.connect_button.text(), "Connect")
+        self.assertEqual(dialog.remove_button.text(), "Remove Server")
+        self.assertTrue(dialog.connect_button.isDefault(),
+                        "Enter should still connect")
+
+        outer = dialog.layout()
+        row = next((outer.itemAt(i).layout() for i in range(outer.count())
+                    if outer.itemAt(i).layout() is not None
+                    and outer.itemAt(i).layout().indexOf(dialog.remove_button) >= 0),
+                   None)
+        self.assertIsNotNone(row, "the buttons are not laid out in a row")
+        order = [row.itemAt(i).widget().text() for i in range(row.count())
+                 if row.itemAt(i).widget() is not None]
+        self.assertEqual(order, ["Connect", "Cancel", "Remove Server"])
+
+    def test_remove_takes_only_the_selected_server(self):
+        dialog = self.dialog()
+        dialog.host.setEditText("192.168.0.8")
+        dialog.remove_selected()
+
+        self.assertEqual(self.history.hosts(), ["vnc.example.com"],
+                         "removed more than the selected server")
+        self.assertEqual(dialog.host.count(), 1)
+
+    def test_removing_repeatedly_empties_the_list(self):
+        """Three servers should take three clicks, not one."""
+        self.history.remember("third.host", 5900, "", "Third")
+        # Opened on the newest server, as it is when reached from a session.
+        dialog = self.dialog("third.host")
+        self.assertEqual(dialog.host.count(), 3)
+
+        for expected_remaining in (2, 1, 0):
+            dialog.remove_selected()
+            self.assertEqual(dialog.host.count(), expected_remaining)
+        self.assertEqual(self.history.entries(), [])
+
+    def test_remove_does_nothing_when_the_box_is_empty(self):
+        """Opened with no host chosen, there is nothing selected to remove."""
+        dialog = self.dialog()
+        self.assertEqual(dialog.host.currentText(), "")
+        self.assertFalse(dialog.remove_button.isEnabled())
+        dialog.remove_selected()
+        self.assertEqual(len(self.history.entries()), 2)
+
+    def test_removing_lands_on_the_next_server(self):
+        dialog = self.dialog()
+        dialog.host.setEditText("vnc.example.com")  # the newest
+        dialog.remove_selected()
+        self.assertEqual(dialog.host.currentText(), "192.168.0.8")
+        self.assertEqual(dialog.server_name.text(), "Studio Mac",
+                         "details did not follow the newly selected server")
+
+    def test_remove_is_disabled_for_a_host_not_in_the_list(self):
+        dialog = self.dialog("192.168.0.8")
+        self.assertTrue(dialog.remove_button.isEnabled())
+        dialog.host.setEditText("brand.new.host")
+        self.assertFalse(dialog.remove_button.isEnabled())
+
+    def test_removing_the_last_server_leaves_an_empty_box(self):
+        self.history.remove("vnc.example.com")
+        dialog = self.dialog("192.168.0.8")
+        dialog.remove_selected()
+        self.assertEqual(dialog.host.count(), 0)
+        self.assertEqual(dialog.host.currentText(), "")
+        self.assertFalse(dialog.remove_button.isEnabled())
+
+    def make_window(self):
+        """A window whose connect_to opens no socket.
+
+        MainWindow.connect_to starts a real RFBClient; left alone the tests
+        below would block on a DNS lookup for a host that does not exist.
+        """
+        class DummyClient:
+            def __init__(self, *args, **kwargs):
+                self.desktop_name = "Stub desktop"
+                self.width, self.height = REMOTE_W, REMOTE_H
+                self.framebuffer = bytearray(REMOTE_W * REMOTE_H * 4)
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        original = ui_module.RFBClient
+        ui_module.RFBClient = DummyClient
+        self.addCleanup(setattr, ui_module, "RFBClient", original)
+
+        window = MainWindow()
+        window.history = self.history
+        self.addCleanup(window.close)
+        return window
+
+    def test_a_server_is_remembered_only_after_it_connects(self):
+        window = self.make_window()
+        window.connect_to("new.host", 5900, "user", "pw", WHEEL_SPEED_DEFAULT,
+                          "Fresh")
+        self.assertIsNone(self.history.find("new.host"),
+                          "remembered before the session came up")
+
+        window._on_resize(REMOTE_W, REMOTE_H)
+        entry = self.history.find("new.host")
+        self.assertIsNotNone(entry, "not remembered after connecting")
+        self.assertEqual(entry["name"], "Fresh")
+        self.assertEqual(entry["username"], "user")
+
+    def test_a_failed_connection_is_not_remembered(self):
+        window = self.make_window()
+        # _on_disconnect raises a modal warning, which blocks forever offscreen.
+        original = QMessageBox.warning
+        QMessageBox.warning = staticmethod(lambda *args, **kwargs: None)
+        self.addCleanup(setattr, QMessageBox, "warning", original)
+
+        window.connect_to("bad.host", 5900, "", "", WHEEL_SPEED_DEFAULT, "Nope")
+        window._on_disconnect("connection refused")
+        self.assertIsNone(self.history.find("bad.host"))
+
+    def test_the_server_name_reaches_the_window_title_and_status(self):
+        window = self.make_window()
+        window.connect_to("192.168.0.8", 5900, "someone", "pw",
+                          WHEEL_SPEED_DEFAULT, "Studio Mac")
+        window._on_resize(REMOTE_W, REMOTE_H)
+        self.assertIn("Studio Mac", window.windowTitle())
+        self.assertIn("Studio Mac", window.status.text())
+
+    def test_disconnecting_resets_the_title_and_status(self):
+        window = self.make_window()
+        window.connect_to("192.168.0.8", 5900, "someone", "pw",
+                          WHEEL_SPEED_DEFAULT, "Studio Mac")
+        window._on_resize(REMOTE_W, REMOTE_H)
+        self.assertIn("Studio Mac", window.windowTitle())
+
+        window.disconnect()
+        self.assertEqual(window.windowTitle(), "OpenVNCViewer")
+        self.assertEqual(window.status.text(), "Not connected")
+        self.assertIsNone(window.view._image, "viewport still holds a frame")
+
+    def test_a_dropped_session_also_resets_the_title(self):
+        original = QMessageBox.warning
+        QMessageBox.warning = staticmethod(lambda *args, **kwargs: None)
+        self.addCleanup(setattr, QMessageBox, "warning", original)
+
+        window = self.make_window()
+        window.connect_to("192.168.0.8", 5900, "someone", "pw",
+                          WHEEL_SPEED_DEFAULT, "Studio Mac")
+        window._on_resize(REMOTE_W, REMOTE_H)
+        window._on_disconnect("connection closed by server")
+
+        self.assertEqual(window.windowTitle(), "OpenVNCViewer")
+        self.assertIn("Disconnected", window.status.text())
+        self.assertIsNone(window.view._image)
+
+    def test_an_unnamed_server_falls_back_to_the_desktop_name(self):
+        window = self.make_window()
+        window.connect_to("vnc.example.com", 5901, "", "", WHEEL_SPEED_DEFAULT,
+                          "")
+        window._on_resize(REMOTE_W, REMOTE_H)
+        self.assertIn("Stub desktop", window.windowTitle())
+
+
 class ConnectDialogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        # An empty history in a temporary directory, so these never read or
+        # write the real config file.
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.history = ServerHistory(Path(self.directory.name) / "servers.json")
+
     def test_slider_range_and_default(self):
-        dialog = ConnectDialog()
+        dialog = ConnectDialog(history=self.history)
         self.assertEqual(dialog.wheel_speed.minimum(), WHEEL_SPEED_MIN)
         self.assertEqual(dialog.wheel_speed.maximum(), WHEEL_SPEED_MAX)
         self.assertEqual(dialog.wheel_speed.value(), WHEEL_SPEED_DEFAULT)
 
     def test_values_round_trip_the_whole_form(self):
-        dialog = ConnectDialog("mac.local", 5901, "someone", 7)
+        dialog = ConnectDialog("mac.local", 5901, "someone", 7,
+                               history=self.history)
         dialog.password.setText("secret")
-        self.assertEqual(dialog.values(),
-                         ("mac.local", 5901, "someone", "secret", 7))
+        dialog.server_name.setText("Studio")
+        self.assertEqual(
+            dialog.values(),
+            ("mac.local", 5901, "someone", "secret", 7, "Studio", False))
 
 
 if __name__ == "__main__":

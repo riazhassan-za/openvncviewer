@@ -77,7 +77,13 @@ in priority order. The full list lives in [TODO.md](TODO.md) §1.
    implementation of it — but connecting to such a server means accepting it.
 5. **The password is held in memory as a Python `str`**, which cannot be zeroed
    after use and may persist until garbage collection.
-6. **Released executables are unsigned.** Verify the SHA-256 published in the
+6. **A saved password is only as strong as the Windows account it is tied to.**
+   Ticking "Save password" encrypts it with DPAPI, so the file is useless on
+   another machine or to another user. It is *not* proof against code running
+   as you, which can call `CryptUnprotectData` just as the viewer does — the
+   same property every browser password store has. The option is off by
+   default, and unavailable rather than downgraded where DPAPI is absent.
+7. **Released executables are unsigned.** Verify the SHA-256 published in the
    release notes before running one.
 
 ## What is checked

@@ -62,8 +62,20 @@ today.
   and cannot be zeroed after use; it may persist until garbage collection and
   can land in a crash dump. Consider holding it in a `bytearray` and wiping it
   after the credential block is built.
-- [ ] No integration with Windows Credential Manager or any keychain; there is
-  no "save password" feature (deliberate for now, but users will ask).
+- [x] **"Save password" is available and off by default.** When ticked the
+  password is encrypted with Windows DPAPI, keyed to the logged-in account, so
+  `servers.json` is useless on another machine or to another user. The module
+  that writes that file never sees plaintext and cannot decrypt. Where DPAPI is
+  absent the option is disabled rather than downgraded to a key stored next to
+  the ciphertext.
+
+  Still true, and stated in SECURITY.md rather than glossed over: this does not
+  defend against code running as the same user, which can call
+  `CryptUnprotectData` exactly as the viewer does.
+
+- [ ] No integration with Windows Credential Manager proper, which would give
+  the saved password an entry users can see and revoke from Control Panel
+  rather than an opaque blob in a JSON file.
 
 ## 2. Platform and packaging
 
@@ -202,8 +214,13 @@ claiming any change here is an improvement.
 - [x] Full-screen mode via **View → Full screen** or **F11**, hiding the menu
   and status bars. Restores a maximized window as maximized, and releases held
   keys on toggle so a modifier cannot stick on the remote.
-- [ ] Connection details are not remembered between runs — no recent-hosts
-  list, no bookmarks, no config file.
+- [x] Recently connected servers are remembered between runs, in a dropdown on
+  the connect dialog with a user-chosen **Server name** shown alongside, in the
+  window title and in the status bar. Entries are added only after a successful
+  connection, and **Clear history** empties the list. Stored as `servers.json`
+  in the user config directory; passwords are never written to it.
+- [ ] No import or export of the server list, and no ordering other than
+  most-recently-connected — no pinning or manual sort.
 - [ ] Errors surface as a modal `QMessageBox` with the raw exception text.
   Messages like "connection closed by server" are accurate but do not tell a
   non-expert what to do next.
