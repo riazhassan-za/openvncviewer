@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-06
+
 ### Changed
 
 - Only the damaged region of the screen is repainted. Each framebuffer update
@@ -83,6 +85,7 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/riazhassan-za/openvncviewer/releases/tag/v0.1.0
