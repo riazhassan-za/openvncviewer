@@ -14,13 +14,31 @@ These are the items that matter most for a publicly consumed tool. None of them
 are hypothetical — they follow directly from how the protocol is implemented
 today.
 
-- [ ] **Diffie-Hellman parameters from the server are trusted blindly.**
-  In `rfb.py::_auth_ard` the generator, prime and peer public key are read
-  straight off the wire and used. A hostile or spoofed server can supply a weak
-  or degenerate prime (or a peer key of 0/1) and recover the password from the
-  exchange. Add sanity checks: reject small primes, reject `peer_key <= 1` and
-  `peer_key >= prime - 1`, and require a minimum key length (Apple uses 128
-  bytes / 1024 bits).
+- [x] **Diffie-Hellman parameters are validated** before the password is
+  encrypted under a key derived from them. `rfb.py::_validate_dh_group` rejects
+  a prime under 1024 bits, a composite modulus, a generator outside
+  `2 <= g < p`, and a peer public key of 0, 1 or `p-1`; `_auth_ard` also
+  rejects a shared secret that collapses to one of those, and bounds the
+  advertised key length. On any failure it hangs up without sending the
+  credential block.
+
+  Two things learned doing it, both recorded so nobody re-derives them:
+
+  - **macOS offers a 4096-bit group with generator 5**, not the 1024-bit group
+    the original note assumed. An upper bound set from that assumption would
+    have refused every real connection.
+  - **Proving a 4096-bit modulus prime costs ~2.5s**, which would have been
+    paid on every connect against an authentication step that otherwise takes
+    0.68s. Groups whose primality has already been verified are matched by
+    SHA-256 and skip the test. That is a fast path, not an allowlist —
+    an unrecognised prime is still checked in full.
+
+  The original note claimed this stopped a hostile server recovering the
+  password. That was wrong: a hostile server holds the other private key and
+  can decrypt the credentials regardless. What validation actually protects
+  against is a **passive eavesdropper** on an exchange whose parameters were
+  weak, tampered with, or broken. Only server identity verification, below,
+  addresses a hostile server.
 - [ ] **No server identity verification of any kind.** There is no host-key
   pinning, certificate check, or trust-on-first-use record. Anything that can
   intercept TCP/5900 can impersonate the Mac and harvest the macOS account

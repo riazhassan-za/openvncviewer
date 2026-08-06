@@ -342,6 +342,137 @@ class HandshakeRaceTest(unittest.TestCase):
         self.assertEqual(bytes(client.framebuffer), bytes(server.reference.data))
 
 
+class HostileDHServer(threading.Thread):
+    """Offers ARD auth with a Diffie-Hellman group of our choosing."""
+
+    def __init__(self, generator=GENERATOR, prime=PRIME, peer_key=None,
+                 key_len=KEY_LEN):
+        super().__init__(daemon=True)
+        self.generator = generator
+        self.prime = prime
+        self.key_len = key_len
+        self.peer_key = peer_key
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(1)
+        self.port = self.listener.getsockname()[1]
+        self.credentials_received = b""
+        self.done = threading.Event()
+
+    def run(self):
+        try:
+            conn, _ = self.listener.accept()
+            reader = conn.makefile("rb")
+            conn.sendall(b"RFB 003.889\n")
+            reader.read(12)
+            conn.sendall(bytes([1, 30]))
+            reader.read(1)
+
+            peer = self.peer_key
+            if peer is None:
+                peer = pow(self.generator, 0x1234567, self.prime)
+            conn.sendall(struct.pack("!HH", self.generator, self.key_len)
+                         + self.prime.to_bytes(self.key_len, "big")
+                         + peer.to_bytes(self.key_len, "big"))
+
+            # Anything arriving now is the encrypted credential block. A client
+            # that validated properly sends nothing and hangs up, so a short
+            # wait is enough - and keeps the suite quick.
+            conn.settimeout(1.5)
+            try:
+                self.credentials_received = conn.recv(256)
+            except OSError:
+                pass
+            conn.close()
+        except Exception:
+            pass
+        finally:
+            self.done.set()
+
+
+class DiffieHellmanValidationTest(unittest.TestCase):
+    """A weak or degenerate group must stop the password reaching the wire.
+
+    This does not protect against a hostile server, which holds the other
+    private key and can read the credentials regardless. It stops the password
+    going out over an exchange a passive eavesdropper could unwind.
+    """
+
+    def connect_expecting_refusal(self, server):
+        server.start()
+        failure = []
+        finished = threading.Event()
+
+        def on_disconnect(reason):
+            failure.append(reason)
+            finished.set()
+
+        client = RFBClient("127.0.0.1", server.port, USERNAME, PASSWORD,
+                           on_resize=lambda w, h: None,
+                           on_damage=lambda *bounds: None,
+                           on_disconnect=on_disconnect)
+        client.start()
+        self.assertTrue(finished.wait(30), "client neither connected nor failed")
+        client.stop()
+        server.done.wait(10)
+        self.assertEqual(server.credentials_received, b"",
+                         "credentials were sent despite a bad DH group")
+        return failure[0] or ""
+
+    def test_rejects_a_short_prime(self):
+        # 1023-bit prime: under the floor, so cheap to attack.
+        reason = self.connect_expecting_refusal(
+            HostileDHServer(prime=(1 << 1023) - 1525, key_len=128))
+        self.assertIn("Diffie-Hellman", reason)
+
+    def test_rejects_a_composite_modulus(self):
+        # PRIME squared: a 2048-bit composite with no small factors, so it can
+        # only be caught by the primality test itself.
+        composite = PRIME * PRIME
+        for small in (3, 5, 7, 11, 13):
+            self.assertNotEqual(composite % small, 0, "caught by trial division")
+        reason = self.connect_expecting_refusal(
+            HostileDHServer(prime=composite, key_len=256))
+        self.assertIn("not prime", reason)
+
+    def test_rejects_a_degenerate_peer_key(self):
+        for peer_key in (0, 1, PRIME - 1):
+            with self.subTest(peer_key=peer_key):
+                reason = self.connect_expecting_refusal(
+                    HostileDHServer(peer_key=peer_key))
+                self.assertIn("degenerate", reason)
+
+    def test_rejects_a_bad_generator(self):
+        for generator in (0, 1):
+            with self.subTest(generator=generator):
+                reason = self.connect_expecting_refusal(
+                    HostileDHServer(generator=generator))
+                self.assertIn("generator", reason)
+
+    def test_rejects_an_absurd_key_length(self):
+        # A tiny group the client must refuse on the advertised length alone,
+        # before it even reads the prime. The prime has to fit in key_len bytes
+        # or the server, not the client, is what fails.
+        reason = self.connect_expecting_refusal(
+            HostileDHServer(generator=2, prime=97, peer_key=5, key_len=8))
+        self.assertIn("Diffie-Hellman", reason)
+
+    def test_accepts_the_group_the_tests_use(self):
+        from openvncviewer.rfb import _validate_dh_group
+        _validate_dh_group(GENERATOR, PRIME, pow(GENERATOR, 12345, PRIME))
+
+    def test_known_groups_skip_the_expensive_primality_test(self):
+        """Otherwise every connect pays seconds of Miller-Rabin."""
+        from openvncviewer.rfb import _prime_digest, _VERIFIED_PRIME_DIGESTS
+        self.assertIn(_prime_digest(PRIME), _VERIFIED_PRIME_DIGESTS)
+
+        start = time.perf_counter()
+        from openvncviewer.rfb import _validate_dh_group
+        _validate_dh_group(GENERATOR, PRIME, pow(GENERATOR, 999, PRIME))
+        self.assertLess(time.perf_counter() - start, 0.05,
+                        "a known-good group took the slow path")
+
+
 class DamageBoundsTest(unittest.TestCase):
     """The view repaints only what changed, so the bounds must be right."""
 
