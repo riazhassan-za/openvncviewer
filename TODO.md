@@ -89,11 +89,17 @@ today.
 - [ ] **Encodings are limited to Raw, CopyRect and ZRLE**, plus the DesktopSize
   pseudo-encoding. Tight, Hextile, RRE, CoRRE and zlib are not implemented.
   Tight in particular would cut bandwidth substantially on photographic content.
-- [ ] **Legacy VNC password authentication (security type 2) is unsupported.**
-  If a server offers only type 2, the viewer reports a clear error naming the
-  macOS setting to change, but cannot connect. Non-Apple servers (RealVNC,
-  TightVNC, x11vnc, TigerVNC server) have not been tested at all and most will
-  not offer type 30.
+- [x] **Legacy VNC password authentication (security type 2) works**, so
+  non-Apple servers connect. The client picks the strongest scheme it can
+  satisfy from what the server offers and which credentials were supplied: ARD
+  when a username was given, otherwise the VNC password, otherwise none.
+  Verified against a live non-Apple server offering types 2 and 16.
+- [ ] **Tight security (16), TLS (18) and VeNCrypt (19) are unsupported.** A
+  server that merely offers one of these is fine — we pick type 2 instead — but
+  one that *requires* it cannot be connected to. VeNCrypt in particular would
+  bring transport encryption to non-Apple servers.
+- [ ] Only the security type of Tight is missing; the **Tight encoding** is a
+  separate item above and would cut bandwidth on photographic content.
 - [ ] **No clipboard synchronisation** in either direction. `ServerCutText` is
   read off the wire and discarded.
 - [ ] **No cursor pseudo-encodings.** The server renders the pointer into the
@@ -105,7 +111,9 @@ today.
   design — but some users will expect the Mac's resolution to follow the window
   and should be told it does not.
 - [ ] No reconnect or retry on a dropped link; the session simply ends.
-- [ ] RFB 3.3 servers take an untested code path in `_authenticate`.
+- [x] RFB 3.3 servers work and are tested. A 3.3 server dictates the security
+  type rather than offering a list, and differs from 3.7/3.8 in when it sends
+  `SecurityResult`; both are handled.
 
 ## 4. Performance
 

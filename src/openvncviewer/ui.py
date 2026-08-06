@@ -315,7 +315,7 @@ class ConnectDialog(QDialog):
     def __init__(self, host="", port=5900, username="",
                  wheel_speed=WHEEL_SPEED_DEFAULT, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Connect to macOS Screen Sharing")
+        self.setWindowTitle("Connect to a VNC server")
 
         self.host = QLineEdit(host)
         self.host.setPlaceholderText("hostname or IP")
@@ -323,13 +323,22 @@ class ConnectDialog(QDialog):
         self.port.setRange(1, 65535)
         self.port.setValue(port)
         self.username = QLineEdit(username)
+        self.username.setPlaceholderText("macOS account - blank for other servers")
+        self.username.setToolTip(
+            "A macOS account name, for Screen Sharing.\n"
+            "Leave blank for a standard VNC server, which authenticates with a "
+            "password alone.")
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
+        self.password.setToolTip(
+            "The macOS account password, or the VNC password.\n"
+            "Standard VNC passwords are limited to 8 characters by the "
+            "protocol; anything longer is ignored.")
 
         form = QFormLayout()
         form.addRow("Host", self.host)
         form.addRow("Port", self.port)
-        form.addRow("macOS user", self.username)
+        form.addRow("Username", self.username)
         form.addRow("Password", self.password)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "openvncviewer"
 # Single source of truth: openvncviewer.__version__ (see tool.setuptools.dynamic).
 dynamic = ["version"]
-description = "A VNC viewer for macOS Screen Sharing that scales the remote desktop to the client window"
+description = "A VNC viewer that scales the remote desktop to the client window, with macOS Screen Sharing and standard VNC password login"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]

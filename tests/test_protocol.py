@@ -1,7 +1,8 @@
-"""End-to-end test against a fake server that mimics macOS Screen Sharing.
+"""End-to-end tests against fake servers, with no real host required.
 
-Checks the ARD (security type 30) handshake and the Raw / CopyRect / ZRLE
-decoders by comparing the client framebuffer against an independently
+Covers the macOS ARD handshake (security type 30), the legacy VNC password
+(type 2) used by other servers, RFB 3.3/3.7/3.8 differences, and the Raw /
+CopyRect / ZRLE decoders - the last compared against an independently
 computed reference image.
 """
 
@@ -14,9 +15,10 @@ import time
 import unittest
 import zlib
 
+from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from openvncviewer.rfb import RFBClient, RFBError
+from openvncviewer.rfb import SEC_NONE, SEC_VNC, RFBClient, RFBError
 
 # RFC 2409 group 2 (1024-bit), the size Apple's server uses.
 PRIME = int(
@@ -471,6 +473,184 @@ class DiffieHellmanValidationTest(unittest.TestCase):
         _validate_dh_group(GENERATOR, PRIME, pow(GENERATOR, 999, PRIME))
         self.assertLess(time.perf_counter() - start, 0.05,
                         "a known-good group took the slow path")
+
+
+class FakeVNCServer(threading.Thread):
+    """A plain RFB server: no ARD, just the legacy VNC password (type 2)."""
+
+    def __init__(self, password="secret12", version=b"RFB 003.008\n",
+                 offer=(SEC_VNC,), fail_auth=False):
+        super().__init__(daemon=True)
+        self.password = password
+        self.version = version
+        self.offer = offer
+        self.fail_auth = fail_auth
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(1)
+        self.port = self.listener.getsockname()[1]
+        self.chosen_type = None
+        self.response_valid = None
+        self.error = None
+        self.ready = threading.Event()
+
+    def expected_response(self, challenge):
+        """Computed here independently of the client's own key derivation."""
+        raw = self.password.encode("utf-8")[:8].ljust(8, b"\x00")
+        key = bytes(int(f"{byte:08b}"[::-1], 2) for byte in raw)
+        encryptor = Cipher(TripleDES(key * 3), modes.ECB()).encryptor()
+        return encryptor.update(challenge) + encryptor.finalize()
+
+    def run(self):
+        try:
+            self.conn, _ = self.listener.accept()
+            reader = self.conn.makefile("rb")
+            self.conn.sendall(self.version)
+            reader.read(12)
+
+            minor = int(self.version[8:11])
+            if minor >= 7:
+                self.conn.sendall(bytes([len(self.offer)]) + bytes(self.offer))
+                self.chosen_type = reader.read(1)[0]
+            else:
+                self.conn.sendall(struct.pack("!I", self.offer[0]))
+                self.chosen_type = self.offer[0]
+
+            if self.chosen_type == SEC_VNC:
+                challenge = os.urandom(16)
+                self.conn.sendall(challenge)
+                response = reader.read(16)
+                self.response_valid = response == self.expected_response(challenge)
+
+            failed = self.fail_auth or self.response_valid is False
+            if minor >= 8 or self.chosen_type != SEC_NONE:
+                self.conn.sendall(struct.pack("!I", 1 if failed else 0))
+                if failed and minor >= 8:
+                    reason = b"bad password"
+                    self.conn.sendall(struct.pack("!I", len(reason)) + reason)
+            if failed:
+                self.ready.set()
+                self.conn.close()
+                return
+
+            reader.read(1)  # ClientInit
+            name = b"Plain VNC"
+            self.conn.sendall(struct.pack("!HH", WIDTH, HEIGHT)
+                         + struct.pack("!BBBBHHHBBB3x", 32, 24, 0, 1,
+                                       255, 255, 255, 16, 8, 0)
+                         + struct.pack("!I", len(name)) + name)
+
+            while True:  # consume setup, then send one raw full-screen rect
+                kind = reader.read(1)[0]
+                if kind == 0:
+                    reader.read(19)
+                elif kind == 2:
+                    count = struct.unpack("!xH", reader.read(3))[0]
+                    reader.read(count * 4)
+                elif kind == 3:
+                    reader.read(9)
+                    break
+                elif kind == 4:
+                    reader.read(7)
+                elif kind == 5:
+                    reader.read(5)
+            body = bytes((7, 8, 9, 255)) * (WIDTH * HEIGHT)
+            self.conn.sendall(struct.pack("!BxH", 0, 1)
+                         + struct.pack("!HHHHi", 0, 0, WIDTH, HEIGHT, 0) + body)
+            self.ready.set()
+        except Exception as exc:
+            self.error = exc
+            self.ready.set()
+
+
+class StandardVNCTest(unittest.TestCase):
+    """Connecting to a non-Apple server that uses the legacy VNC password."""
+
+    def run_client(self, server, username="", password="secret12", timeout=20):
+        server.start()
+        connected = threading.Event()
+        failure = []
+        client = RFBClient("127.0.0.1", server.port, username, password,
+                           on_resize=lambda w, h: None,
+                           on_damage=lambda *bounds: connected.set(),
+                           on_disconnect=lambda reason: (failure.append(reason),
+                                                         connected.set()))
+        client.start()
+        connected.wait(timeout)
+        client.stop()
+        server.ready.wait(5)
+        return client, (failure[0] if failure else None)
+
+    def test_des_key_matches_a_published_vector(self):
+        """Guards the bit-reversal and the single-DES-via-3DES construction."""
+        from openvncviewer.rfb import _vnc_auth_key
+        # FIPS 81 vector: key 0123456789abcdef, "Now is t" -> 3fa40e8a984d4815.
+        encryptor = Cipher(TripleDES(bytes.fromhex("0123456789abcdef") * 3),
+                           modes.ECB()).encryptor()
+        out = encryptor.update(b"Now is t") + encryptor.finalize()
+        self.assertEqual(out.hex(), "3fa40e8a984d4815")
+        # And the VNC quirk: every bit of every password byte is reversed.
+        self.assertEqual(_vnc_auth_key("\x01"), bytes([0x80]) + b"\x00" * 7)
+
+    def test_connects_with_a_vnc_password(self):
+        server = FakeVNCServer(password="secret12")
+        client, failure = self.run_client(server)
+        self.assertIsNone(server.error, f"server failed: {server.error!r}")
+        self.assertEqual(server.chosen_type, SEC_VNC)
+        self.assertTrue(server.response_valid, "DES challenge response rejected")
+        self.assertIsNone(failure)
+        self.assertEqual(client.desktop_name, "Plain VNC")
+        self.assertEqual((client.width, client.height), (WIDTH, HEIGHT))
+
+    def test_a_wrong_password_is_reported_clearly(self):
+        server = FakeVNCServer(password="correct1")
+        _, failure = self.run_client(server, password="wrong999")
+        self.assertFalse(server.response_valid)
+        self.assertIsNotNone(failure)
+        self.assertIn("password", failure.lower())
+
+    def test_passwords_past_eight_characters_are_ignored(self):
+        """The protocol truncates; the viewer must truncate identically."""
+        server = FakeVNCServer(password="12345678")
+        _, failure = self.run_client(server, password="12345678ignored")
+        self.assertTrue(server.response_valid)
+        self.assertIsNone(failure)
+
+    def test_a_server_needing_no_authentication_works(self):
+        server = FakeVNCServer(offer=(SEC_NONE,))
+        client, failure = self.run_client(server, password="")
+        self.assertEqual(server.chosen_type, SEC_NONE)
+        self.assertIsNone(failure)
+        self.assertEqual(client.desktop_name, "Plain VNC")
+
+    def test_rfb_3_3_servers_work(self):
+        """3.3 dictates the security type instead of offering a list."""
+        server = FakeVNCServer(password="secret12", version=b"RFB 003.003\n")
+        client, failure = self.run_client(server)
+        self.assertIsNone(server.error, f"server failed: {server.error!r}")
+        self.assertTrue(server.response_valid)
+        self.assertIsNone(failure)
+        self.assertEqual(client.desktop_name, "Plain VNC")
+
+    def test_security_type_choice(self):
+        from openvncviewer.rfb import RFBClient as C
+
+        def choose(offered, username, password):
+            client = C.__new__(C)
+            client.username, client.password = username, password
+            return client._choose_security(offered)
+
+        # A macOS account beats the legacy password when both are on offer.
+        self.assertEqual(choose([30, 2, 1], "someone", "pw"), 30)
+        # No account name given, so the VNC password is the sensible pick.
+        self.assertEqual(choose([30, 2, 1], "", "pw"), 2)
+        # Neither credential: take the server at its word that none is needed.
+        self.assertEqual(choose([30, 2, 1], "", ""), 1)
+        self.assertEqual(choose([2], "", "pw"), 2)
+        self.assertEqual(choose([1], "", ""), 1)
+        # Nothing we can speak.
+        with self.assertRaises(RFBError):
+            choose([18, 19], "someone", "pw")
 
 
 class HostileStreamTest(unittest.TestCase):
