@@ -17,9 +17,10 @@
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout, QLabel,
-                               QLineEdit, QMainWindow, QMessageBox, QSpinBox,
-                               QWidget)
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QMainWindow, QMessageBox, QSlider, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 from . import __version__
 from .rfb import RFBClient
@@ -39,6 +40,17 @@ KEYSYMS = {
 KEYSYMS.update({getattr(Qt, f"Key_F{n}"): 0xFFBD + n for n in range(1, 13)})
 
 BUTTONS = {Qt.LeftButton: 1, Qt.MiddleButton: 2, Qt.RightButton: 4}
+
+# One notch of a standard mouse wheel, in eighths of a degree (Qt's unit).
+WHEEL_NOTCH = 120
+# Clicks sent per notch. The minimum is deliberately 1 - the far left of the
+# slider passes the wheel through untouched - and the default sits mid-track.
+WHEEL_SPEED_MIN, WHEEL_SPEED_MAX = 1, 100
+WHEEL_SPEED_DEFAULT = (WHEEL_SPEED_MIN + WHEEL_SPEED_MAX) // 2
+# Ceiling on the clicks one wheel event may produce, so a fast flick cannot
+# flood the server. Must stay well above WHEEL_SPEED_MAX or it would quietly
+# cap the top of the slider instead of just catching runaway flicks.
+WHEEL_CLICK_LIMIT = 500
 
 
 def _keysym(event):
@@ -75,6 +87,7 @@ class RemoteView(QWidget):
         self._image = None
         self._buttons = 0
         self._pressed = {}
+        self.wheel_speed = WHEEL_SPEED_DEFAULT
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setAutoFillBackground(False)
@@ -150,15 +163,29 @@ class RemoteView(QWidget):
         self._buttons &= ~BUTTONS.get(event.button(), 0)
         self._send_pointer(event.position())
 
+    def wheel_clicks(self, delta):
+        """How many scroll clicks one wheel event should send.
+
+        RFB has no scroll magnitude - a wheel notch is a button press. Remote
+        sessions therefore feel sluggish, so the clicks per notch are
+        multiplied by the user's chosen speed. At the minimum this is the raw,
+        unamplified notch count.
+        """
+        notches = max(1, round(abs(delta) / WHEEL_NOTCH))
+        return min(notches * self.wheel_speed, WHEEL_CLICK_LIMIT)
+
     def wheelEvent(self, event):
         point = self._remote_point(event.position())
         if point is None or not self._client:
             return
         steps = event.angleDelta()
         for delta, down, up in ((steps.y(), 8, 16), (steps.x(), 32, 64)):
-            if delta:
-                button = down if delta > 0 else up
-                self._client.send_pointer(point.x(), point.y(), self._buttons | button)
+            if not delta:
+                continue
+            button = down if delta > 0 else up
+            for _ in range(self.wheel_clicks(delta)):
+                self._client.send_pointer(point.x(), point.y(),
+                                          self._buttons | button)
                 self._client.send_pointer(point.x(), point.y(), self._buttons)
 
     def event(self, event):
@@ -197,9 +224,11 @@ class RemoteView(QWidget):
 
 
 class ConnectDialog(QDialog):
-    def __init__(self, host="", port=5900, username="", parent=None):
+    def __init__(self, host="", port=5900, username="",
+                 wheel_speed=WHEEL_SPEED_DEFAULT, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Connect to macOS Screen Sharing")
+
         self.host = QLineEdit(host)
         self.host.setPlaceholderText("hostname or IP")
         self.port = QSpinBox()
@@ -209,20 +238,53 @@ class ConnectDialog(QDialog):
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
 
+        form = QFormLayout()
+        form.addRow("Host", self.host)
+        form.addRow("Port", self.port)
+        form.addRow("macOS user", self.username)
+        form.addRow("Password", self.password)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
-        layout = QFormLayout(self)
-        layout.addRow("Host", self.host)
-        layout.addRow("Port", self.port)
-        layout.addRow("macOS user", self.username)
-        layout.addRow("Password", self.password)
-        layout.addRow(buttons)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self._build_options(wheel_speed))
+        layout.addStretch()
+        layout.addWidget(buttons)
+
+    def _build_options(self, wheel_speed):
+        """The Options group: everything that tunes the session, not the login."""
+        self.wheel_speed = QSlider(Qt.Horizontal)
+        self.wheel_speed.setRange(WHEEL_SPEED_MIN, WHEEL_SPEED_MAX)
+        self.wheel_speed.setValue(wheel_speed)
+        self.wheel_speed.setTickPosition(QSlider.TicksBelow)
+        self.wheel_speed.setTickInterval((WHEEL_SPEED_MAX - WHEEL_SPEED_MIN) // 10)
+        self.wheel_speed.setSingleStep(1)
+        self.wheel_speed.setPageStep(10)
+        self.wheel_speed.setToolTip(
+            "How many scroll clicks to send per wheel notch.\n"
+            "Leftmost sends the wheel untouched; move right if scrolling "
+            "feels sluggish over the network.")
+        # No explicit fonts anywhere here: inheriting the dialog's font is what
+        # keeps this consistent with the rest of the interface.
+        ends = QHBoxLayout()
+        ends.addWidget(QLabel("Raw"))
+        ends.addStretch()
+        ends.addWidget(QLabel("Faster"))
+
+        options = QGroupBox("Options")
+        inner = QVBoxLayout(options)
+        inner.addWidget(QLabel("Mouse wheel speed"))
+        inner.addWidget(self.wheel_speed)
+        inner.addLayout(ends)
+        return options
 
     def values(self):
         return (self.host.text().strip(), self.port.value(),
-                self.username.text(), self.password.text())
+                self.username.text(), self.password.text(),
+                self.wheel_speed.value())
 
 
 class MainWindow(QMainWindow):
@@ -250,7 +312,7 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("&About", self.show_about)
 
-        self.last_connection = ("", 5900, "")
+        self.last_connection = ("", 5900, "", WHEEL_SPEED_DEFAULT)
 
     def show_about(self):
         # The GPL asks interactive programs to carry a short warranty notice.
@@ -268,13 +330,15 @@ class MainWindow(QMainWindow):
     def prompt_connect(self):
         dialog = ConnectDialog(*self.last_connection, parent=self)
         if dialog.exec() == QDialog.Accepted:
-            host, port, username, password = dialog.values()
+            host, port, username, password, wheel_speed = dialog.values()
             if host:
-                self.connect_to(host, port, username, password)
+                self.connect_to(host, port, username, password, wheel_speed)
 
-    def connect_to(self, host, port, username, password):
+    def connect_to(self, host, port, username, password,
+                   wheel_speed=WHEEL_SPEED_DEFAULT):
         self.disconnect()
-        self.last_connection = (host, port, username)
+        self.view.wheel_speed = wheel_speed
+        self.last_connection = (host, port, username, wheel_speed)
         self.status.setText(f"Connecting to {host}:{port}...")
         self.client = RFBClient(
             host, port, username, password,
