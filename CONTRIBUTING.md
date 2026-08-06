@@ -40,6 +40,25 @@ If you fix a bug, **prove the test catches it**: disable your fix, watch the
 new test fail, then re-enable it. The handshake-race regression test was
 validated exactly that way.
 
+## Performance changes
+
+Measure, do not assume. There are benchmarks for the two hot paths:
+
+```
+.venv\Scripts\python.exe benchmarks\decode.py
+.venv\Scripts\python.exe benchmarks\paint.py
+```
+
+Run them before and after your change and put both numbers in the pull
+request. This is not ceremony — during the work that produced these
+benchmarks, an "obviously faster" single-copy blit for full-width rectangles
+turned out to be **2.3x slower** than copying row by row, because row-sized
+pieces stay in cache and a 30 MB memcpy does not. It would have shipped as an
+improvement without a measurement.
+
+If you make something faster, add the numbers to [TODO.md](TODO.md) §4 so the
+next person inherits a baseline rather than a claim.
+
 ## Code style
 
 - Match the surrounding code. Standard library only in `rfb.py`, plus
