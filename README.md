@@ -133,12 +133,20 @@ Diffie-Hellman exchange with the server, MD5s the shared secret into an
 AES-128 key, and sends the username and password as two 64-byte
 null-terminated fields encrypted with AES-128-ECB.
 
-> **Security note.** That scheme is Apple's, not ours, and it is weak by modern
-> standards. More importantly, **everything after authentication is plaintext
-> RFB** — screen contents and keystrokes included — and the server's identity is
-> not verified at all. On any network you do not fully trust, tunnel it:
+macOS offers a 4096-bit group with generator 5. The group is validated before
+the password is encrypted under a key derived from it — a prime under 1024
+bits, a composite modulus, a bad generator or a degenerate public key all cause
+the client to hang up without sending the credential block.
+
+> **Security note.** That validation protects the exchange from a passive
+> eavesdropper. It does **not** protect against a hostile server, which holds
+> the other private key and can decrypt the credentials whatever group it
+> chose — the server's identity is not verified at all. The scheme itself is
+> Apple's, not ours, and is weak by modern standards, and **everything after
+> authentication is plaintext RFB**, screen contents and keystrokes included.
+> On any network you do not fully trust, tunnel it:
 > `ssh -L 5900:localhost:5900 you@mac` and connect to `localhost`.
-> See [TODO.md](TODO.md) §1 for the full list of security caveats.
+> See [SECURITY.md](SECURITY.md) for the full picture.
 
 ## Encodings
 

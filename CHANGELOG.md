@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- The Diffie-Hellman group offered for ARD authentication is now validated
+  before the password is encrypted under a key derived from it. The client
+  refuses a prime below 1024 bits, a composite modulus, a generator outside
+  `2 <= g < p`, a peer public key of 0, 1 or `p-1`, and a shared secret that
+  collapses to one of those — hanging up without sending the credential block.
+
+  This protects the exchange from a passive eavesdropper and catches parameters
+  tampered with in transit or a broken server. It does *not* protect against a
+  hostile server, which holds the other private key and can decrypt the
+  credentials whatever group it chose; that needs server identity verification,
+  which is still open.
+
+  Groups whose primality has already been verified are matched by SHA-256 and
+  skip the Miller-Rabin test, because proving macOS's 4096-bit modulus prime
+  costs about 2.5 seconds and would otherwise be paid on every connect.
+  Authentication against a real Mac remains at 0.68s.
+
 ## [0.4.0] - 2026-08-06
 
 ### Added
