@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openvncviewer"
+version = "0.1.0"
+description = "A VNC viewer for macOS Screen Sharing that scales the remote desktop to the client window"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "The OpenVNCViewer contributors" }]
+keywords = ["vnc", "rfb", "macos", "screen-sharing", "remote-desktop", "ard"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    # No "License ::" classifier: it is invalid alongside the PEP 639
+    # `license` expression above, and setuptools rejects the combination.
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking",
+]
+
+# PySide6 constrains the upper Python bound (<3.15); leave that to the resolver.
+dependencies = [
+    "PySide6>=6.5",
+    "cryptography>=41",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.10"]
+
+[project.urls]
+Homepage = "https://github.com/riazhassan-za/openvncviewer"
+Issues = "https://github.com/riazhassan-za/openvncviewer/issues"
+Changelog = "https://github.com/riazhassan-za/openvncviewer/blob/main/CHANGELOG.md"
+
+[project.gui-scripts]
+openvncviewer = "openvncviewer.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

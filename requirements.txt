@@ -1,0 +1,4 @@
+# Pinned runtime dependencies for reproducible builds and CI.
+# pyproject.toml holds the authoritative (looser) ranges for library installs.
+PySide6==6.11.1
+cryptography==50.0.0
