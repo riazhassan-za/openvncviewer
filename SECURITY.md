@@ -1,7 +1,8 @@
 # Security Policy
 
-OpenVNCViewer handles a macOS account password and carries the contents of a
-remote screen, so security reports are taken seriously. Please read the
+OpenVNCViewer handles a macOS account password or a VNC password, and carries
+the contents of a remote screen, so security reports are taken seriously.
+Please read the
 **Known and accepted weaknesses** section first — several of the obvious
 problems are already documented, and a report restating one of them tells us
 nothing new.
@@ -10,8 +11,8 @@ nothing new.
 
 | Version | Supported |
 | --- | --- |
-| 0.2.x | Yes |
-| 0.1.x | No — upgrade to 0.2.x |
+| latest release | Yes |
+| anything older | No — upgrade |
 
 This is a young project with a single maintainer. Only the latest release gets
 fixes; there are no backport branches.
@@ -69,9 +70,14 @@ in priority order. The full list lives in [TODO.md](TODO.md) §1.
    MD5 and encrypts the credential block in ECB mode. This cannot be changed
    without the server's cooperation; implementing one of Apple's RSA-AES
    security types (31/32/33/35) is the real fix.
-4. **The password is held in memory as a Python `str`**, which cannot be zeroed
+4. **Legacy VNC authentication (type 2) is weak by design.** It is single DES
+   with a 56-bit key, and the challenge and response are both visible on the
+   wire, so an eavesdropper can recover the password offline. The scheme also
+   caps the password at 8 characters. This is the protocol, not our
+   implementation of it — but connecting to such a server means accepting it.
+5. **The password is held in memory as a Python `str`**, which cannot be zeroed
    after use and may persist until garbage collection.
-5. **Released executables are unsigned.** Verify the SHA-256 published in the
+6. **Released executables are unsigned.** Verify the SHA-256 published in the
    release notes before running one.
 
 ## What is checked

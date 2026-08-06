@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Support for standard VNC servers.** Legacy VNC password authentication
+  (security type 2) is implemented, so non-Apple servers connect. Leave
+  **Username** blank in the connect dialog and the viewer uses the VNC password;
+  fill it in and it still prefers a macOS account over the legacy scheme where
+  both are on offer. Servers requiring no authentication also work.
+
+  The client now picks the strongest scheme it can satisfy from what the server
+  offers and which credentials were supplied, rather than assuming a Mac.
+
+  Two caveats, both inherent to the scheme rather than to this implementation:
+  the password is capped at 8 characters, and single DES with a 56-bit key is
+  recoverable offline by anyone who sees the challenge and response.
+
+- RFB 3.3 servers work and are tested. A 3.3 server dictates the security type
+  instead of offering a list, and differs on when `SecurityResult` is sent.
+  This path previously existed but had never been exercised.
+
+### Changed
+
+- The connect dialog is retitled "Connect to a VNC server", with **Username**
+  relabelled from "macOS user" and tooltips explaining that blank means a
+  standard VNC server and that VNC passwords are truncated to 8 characters.
+
 ### Security
 
 - The decoder is hardened against a hostile or broken server. Three problems,
