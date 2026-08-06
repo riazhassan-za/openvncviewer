@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Only the damaged region of the screen is repainted. Each framebuffer update
+  now reports the bounding box of every rectangle it contained, and the view
+  rescales just that part into a cached `QPixmap` instead of smooth-scaling the
+  whole desktop on every frame. At 3420x2214 a 64x64 change costs 0.02 ms
+  against 1.86 ms for the previous full rescale.
+- Packed-palette ZRLE tiles memoise the expansion of each packed byte rather
+  than looping per pixel, and decoded tiles are written straight into the
+  framebuffer instead of being staged in a scratch buffer and copied twice.
+  Packed-palette decoding went from 7.8 to 27.0 Mpx/s; every other tile
+  subencoding improved between 15% and 25%.
+- Pointer motion is coalesced to roughly one message per 16 ms. The first move
+  of a burst is still sent immediately, and button presses bypass the queue so
+  they cannot be reordered behind a pending move.
+
+### Added
+
+- `benchmarks/decode.py` and `benchmarks/paint.py`, so the numbers above can be
+  reproduced rather than taken on trust.
+
+### Fixed
+
+- Packed-palette ZRLE tiles could raise `IndexError` on a stream whose row
+  padding bits were not zero. The palette is now padded to cover every index
+  the bit mask can produce. The previous per-pixel loop stopped at the tile
+  width and never read those bits, so this was latent rather than observed.
+
 ## [0.2.0] - 2026-08-06
 
 ### Added

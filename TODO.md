@@ -91,24 +91,56 @@ today.
 
 ## 4. Performance
 
-- [ ] **ZRLE tile decoding is pure Python and is the bottleneck.** Packed
-  palette and RLE tiles run a per-pixel Python loop. On the 3420x2214 display
-  used for testing this is noticeable; on a busy screen it will cap the frame
-  rate well below what the network can carry. Options, cheapest first:
-  decode into a preallocated `memoryview` instead of building and joining
-  lists; move the inner loops to `numpy`; or add a small C/Cython extension.
+Numbers below come from `benchmarks/decode.py` and `benchmarks/paint.py` at
+3420x2214, the resolution the project is tested against. Re-run them before
+claiming any change here is an improvement.
+
+- [~] **ZRLE tile decoding is pure Python.** The cheapest option in the
+  original list is done: packed-palette tiles memoise the expansion of each
+  packed byte instead of looping per pixel, and decoded tiles are written
+  straight into the framebuffer rather than staged in a scratch buffer and
+  copied twice.
+
+  | Tile subencoding | Before | After |
+  | --- | --- | --- |
+  | packed palette | 7.8 Mpx/s | 27.0 Mpx/s |
+  | raw | 75.3 Mpx/s | 90.4 Mpx/s |
+  | solid | 173.5 Mpx/s | 218.3 Mpx/s |
+  | plain RLE | 104.6 Mpx/s | 124.1 Mpx/s |
+  | palette RLE | 21.5 Mpx/s | 21.7 Mpx/s |
+
+  Still open: **palette RLE is now the slowest path** at 21.7 Mpx/s, and did
+  not benefit — its cost is the per-run Python loop, not per-pixel work, so
+  memoisation has nothing to save. Moving the inner loops to `numpy` or a small
+  C/Cython extension remains the way to go further, at the cost of a build
+  dependency.
+
 - [ ] **The framebuffer is written by the network thread while the UI thread
-  paints from it, with no lock.** This is deliberate (a lock or a copy of a
-  30 MB buffer costs more than it saves) and the worst case is brief tearing
-  during a repaint, not a crash — the `bytearray` is replaced, never resized in
-  place, so QImage never sees freed memory. Revisit if tearing is reported.
-- [ ] Every `FramebufferUpdate` triggers a full-widget repaint and a full
-  rescale of the entire image. Damage rectangles are known but not used to
-  limit the repaint region.
-- [ ] The smooth-scaled blit happens on the CPU on every paint. Caching a
-  pre-scaled `QPixmap` and only regenerating it when the window size or the
-  framebuffer changes would help a lot when the remote screen is static.
-- [ ] Pointer motion is sent on every mouse-move event with no coalescing.
+  paints from it, with no lock.** Reviewed again while doing the work above and
+  deliberately left alone: a lock or a copy of a 30 MB buffer costs more than
+  it saves, and the worst case is brief tearing during a repaint, not a crash —
+  the `bytearray` is replaced, never resized in place, so QImage never sees
+  freed memory. Revisit if tearing is actually reported.
+
+- [x] **Damage rectangles now limit the repaint.** `_handle_framebuffer_update`
+  reports the bounding box of every rectangle in an update, and the view
+  repaints only the corresponding widget rectangle.
+
+- [x] **The scaled image is cached in a `QPixmap`** and only the damaged region
+  is rescaled into it, so painting is a blit rather than a resample. Measured
+  against the old full-rescale-every-frame path:
+
+  | Damaged area | Cost |
+  | --- | --- |
+  | full rescale (old behaviour) | 1.86 ms |
+  | 1710x1107 (a quarter of the screen) | 0.35 ms |
+  | 400x300 (a window) | 0.06 ms |
+  | 64x64 (a tile) | 0.02 ms |
+
+- [x] **Pointer motion is coalesced** to one message per ~16 ms. The first move
+  in a burst is sent immediately so tracking stays responsive, and button
+  presses bypass the queue so they can never be reordered behind a pending
+  move.
 
 ## 5. Input handling
 
@@ -168,18 +200,27 @@ today.
   `IndexError` out of `_read_tile`, which currently just ends the session —
   acceptable, but it should be a clean protocol error, and the decoder should
   be checked against out-of-bounds tile writes.
-- [ ] No performance benchmark, so the optimisations in section 4 cannot be
-  measured objectively.
+- [x] Benchmarks under `benchmarks/` for the decoder and the paint path, so
+  section 4's numbers can be reproduced rather than taken on trust.
+- [ ] The benchmarks are not run in CI, so a performance regression would go
+  unnoticed until someone ran them by hand.
 
 ## 8. Documentation
 
 - [x] README covering setup, running, scaling behaviour, the ARD login, and
   building the executable.
-- [x] Screenshots in the README: a scaled session and the connect dialog.
+- [x] Screenshots in the README: a scaled session, the connect dialog, and the
+  other clients that were tried first.
 - [ ] No animated demo showing the window actually being resized, which is the
   one thing a still cannot convey.
 - [ ] No troubleshooting guide (what "connection closed by server" means, what
   to enable in macOS Sharing settings, firewall notes).
+- [ ] The README compares against other VNC clients using a screenshot of their
+  installers. It is captioned to make clear they are good software that simply
+  did not do these two things together, but before the repository goes public
+  it is worth deciding whether naming and crossing out other projects is the
+  tone wanted, since it uses their logos and reads as disparagement at a
+  glance.
 - [ ] No architecture document; the protocol/UI split is only explained in
   docstrings and the README table.
 

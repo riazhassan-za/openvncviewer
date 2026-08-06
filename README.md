@@ -27,6 +27,15 @@ Two things are awkward with the usual Windows VNC clients against a Mac:
 2. **Scaling.** A 3420x2214 Retina desktop on a 1920x1080 monitor is
    unusable without client-side scaling.
 
+<img src="screenshots/other-clients.png" alt="A downloads folder of VNC clients, crossed out" width="420">
+
+The clients above are all perfectly good software — this is not a claim that
+they are broken. They were tried first and none of them did *both* of the
+things above together on Windows: log in with a plain macOS account name and
+password, and continuously refit a Retina desktop to the window. TigerVNC in
+particular connects happily; it just will not scale to the window. Rather than
+fight that, this exists.
+
 ## Requirements
 
 - 64-bit Windows 10 (1809 or later) or Windows 11
@@ -125,6 +134,39 @@ Pixels are negotiated as 32bpp little-endian BGRX, which is byte-identical to
 `QImage.Format_RGB32`, so the framebuffer `bytearray` is wrapped by QImage
 without copying.
 
+## Performance
+
+Decoding is pure Python, so the viewer is deliberately built to do as little of
+it as possible. Two things carry most of the weight:
+
+- **Only the damaged region is repainted.** Each framebuffer update reports the
+  bounding box of what changed, and just that part of the desktop is rescaled
+  into a cached `QPixmap`. Painting is then a blit rather than a resample.
+- **Packed-palette ZRLE tiles memoise byte expansion.** A tile drawn from 16 or
+  fewer colours repeats packed bytes heavily, so each distinct byte is unpacked
+  once instead of once per pixel, and tiles are written straight into the
+  framebuffer rather than staged and copied twice.
+
+Measured at 3420x2214 on the test machine:
+
+| Work | Cost |
+| --- | --- |
+| Rescale the whole desktop (old behaviour, every frame) | 1.86 ms |
+| Rescale a 400x300 damaged region | 0.06 ms |
+| Rescale a 64x64 damaged tile | 0.02 ms |
+| Decode packed-palette ZRLE | 27.0 Mpx/s |
+| Decode raw ZRLE | 90.4 Mpx/s |
+
+Reproduce with:
+
+```
+.venv\Scripts\python.exe benchmarks\decode.py
+.venv\Scripts\python.exe benchmarks\paint.py
+```
+
+The slowest remaining path is palette-RLE ZRLE at 21.7 Mpx/s, whose cost is the
+per-run Python loop rather than per-pixel work. See [TODO.md](TODO.md) §4.
+
 ## Layout
 
 | Path | Purpose |
@@ -135,6 +177,7 @@ without copying.
 | `tests/test_protocol.py` | Fake macOS server: auth + every encoding path |
 | `tests/test_scaling.py` | Scaling geometry, pointer mapping, painting |
 | `packaging/openvncviewer.spec` | PyInstaller build definition |
+| `benchmarks/` | Decoder and paint-path benchmarks |
 | `screenshots/` | Images used by this README |
 
 The protocol layer is deliberately Qt-free, so it can be tested and reused
