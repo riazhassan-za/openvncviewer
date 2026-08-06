@@ -3,9 +3,10 @@
 [![CI](https://github.com/riazhassan-za/openvncviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/riazhassan-za/openvncviewer/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-A VNC viewer for **macOS Screen Sharing** that logs in with a real macOS
-account name and password, and scales the remote desktop to whatever size the
-client window happens to be.
+A VNC viewer that scales the remote desktop to whatever size the client window
+happens to be. It logs in to **macOS Screen Sharing** with a real macOS account
+name and password, and also connects to **standard VNC servers** using the
+ordinary VNC password.
 
 Most viewers make you choose between a 1:1 window the size of the Mac's display
 and a scrollable viewport. This one always fits the desktop to the window,
@@ -39,11 +40,29 @@ fight that, this exists.
 ## Requirements
 
 - 64-bit Windows 10 (1809 or later) or Windows 11
-- A Mac with **System Settings → General → Sharing → Screen Sharing** enabled,
-  and your account allowed access
+- Either:
+  - a Mac with **System Settings → General → Sharing → Screen Sharing**
+    enabled and your account allowed access, or
+  - any VNC server offering password authentication or no authentication
 
-The legacy "VNC viewers may control screen with password" option is **not**
-needed and is not used.
+For a Mac, the legacy "VNC viewers may control screen with password" option is
+**not** needed — the viewer logs in with the account itself.
+
+## Which servers work
+
+| Server offers | Fill in | Notes |
+| --- | --- | --- |
+| Apple ARD (type 30) | Username **and** password | macOS accounts, any password length |
+| VNC password (type 2) | Password only, **leave Username blank** | Most non-Apple servers |
+| No authentication (type 1) | Neither | |
+
+The viewer picks the strongest scheme it can satisfy from what the server
+offers and what you filled in: ARD when you gave a username, otherwise the VNC
+password, otherwise none. RFB 3.3, 3.7 and 3.8 servers are all handled.
+
+Not supported: Tight security (16), TLS/VeNCrypt (18/19), and Apple's RSA-AES
+variants (31/32/33/35). A server that *requires* one of those cannot be
+connected to.
 
 ## Install
 
@@ -132,6 +151,23 @@ For authentication it selects security type 30. The client performs a
 Diffie-Hellman exchange with the server, MD5s the shared secret into an
 AES-128 key, and sends the username and password as two 64-byte
 null-terminated fields encrypted with AES-128-ECB.
+
+### Standard VNC servers
+
+Leave **Username** blank and the viewer uses security type 2, the ordinary VNC
+password: the server sends a 16-byte challenge, the client returns it DES-
+encrypted under the password.
+
+Two things about that scheme are worth knowing, and neither is our choice:
+
+- **The password is capped at 8 characters.** Anything you type past the eighth
+  is silently ignored — by the protocol, not by this viewer. A longer password
+  on the server side is truncated the same way.
+- **Single DES with a 56-bit key has been breakable for decades.** The
+  challenge and response are both visible on the wire, so an eavesdropper can
+  recover the password offline. Tunnel it if the network is not trusted.
+
+### macOS
 
 macOS offers a 4096-bit group with generator 5. The group is validated before
 the password is encrypted under a key derived from it — a prime under 1024
