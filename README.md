@@ -180,6 +180,9 @@ caveats above.
 See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and patches welcome —
 [TODO.md](TODO.md) is a ready-made list of things worth doing.
 
+Found a security problem? Please read [SECURITY.md](SECURITY.md) and report it
+privately rather than opening a public issue.
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
