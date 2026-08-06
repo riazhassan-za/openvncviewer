@@ -8,12 +8,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
 from PySide6.QtGui import (QImage, QKeySequence, QMouseEvent,  # noqa: E402
                            QWheelEvent)
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from openvncviewer.ui import (WHEEL_CLICK_LIMIT, WHEEL_NOTCH,  # noqa: E402
                               WHEEL_SPEED_DEFAULT, WHEEL_SPEED_MAX,
-                              WHEEL_SPEED_MIN, ConnectDialog, MainWindow,
-                              RemoteView)
+                              WHEEL_SPEED_MIN, DONATION_ADDRESS,
+                              ConnectDialog, MainWindow, RemoteView)
 
 REMOTE_W, REMOTE_H = 200, 120  # 5:3
 BACKGROUND = (24, 24, 24)
@@ -367,6 +367,71 @@ class FullScreenTest(unittest.TestCase):
         window.fullscreen_action.setChecked(True)
         self.assertIn((0xFFE1, False), sent)
         self.assertEqual(window.view._pressed, {})
+        window.close()
+
+
+BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def bech32_checksum_ok(address):
+    """BIP-173 verification, written out here rather than trusting the string.
+
+    A mistyped donation address is silent: it looks fine, and the money goes
+    somewhere nobody can retrieve it from.
+    """
+    if address.lower() != address:
+        return False
+    separator = address.rfind("1")
+    hrp, data = address[:separator], address[separator + 1:]
+    if any(char not in BECH32_CHARSET for char in data):
+        return False
+    values = ([ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+              + [BECH32_CHARSET.index(c) for c in data])
+
+    generator = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
+    checksum = 1
+    for value in values:
+        top = checksum >> 25
+        checksum = (checksum & 0x1FFFFFF) << 5 ^ value
+        for bit in range(5):
+            checksum ^= generator[bit] if (top >> bit) & 1 else 0
+    return checksum == 1
+
+
+class AboutDialogTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_donation_address_is_a_valid_bitcoin_address(self):
+        self.assertTrue(DONATION_ADDRESS.startswith("bc1"),
+                        "not a mainnet bech32 address")
+        self.assertEqual(len(DONATION_ADDRESS), 42,
+                         "wrong length for a P2WPKH address")
+        self.assertTrue(bech32_checksum_ok(DONATION_ADDRESS),
+                        "bech32 checksum failed - the address is mistyped")
+
+    def test_about_shows_the_donation_notice_and_licence(self):
+        window = MainWindow()
+        shown = {}
+
+        def capture(self_box):
+            shown["text"] = self_box.text()
+            return 0
+
+        original = QMessageBox.exec
+        QMessageBox.exec = capture
+        try:
+            window.show_about()
+        finally:
+            QMessageBox.exec = original
+
+        text = shown.get("text", "")
+        self.assertIn(DONATION_ADDRESS, text)
+        self.assertIn(f"bitcoin:{DONATION_ADDRESS}", text, "address is not a link")
+        self.assertIn("great justice", text)
+        # The GPL asks interactive programs to carry a warranty notice.
+        self.assertIn("NO WARRANTY", text)
         window.close()
 
 

@@ -29,6 +29,13 @@ from .rfb import RFBClient
 
 HOMEPAGE = "https://github.com/riazhassan-za/openvncviewer"
 
+# Verified as a valid bech32 segwit v0 mainnet address before being shipped:
+# a mistyped address would send donations nowhere recoverable.
+DONATION_ADDRESS = "bc1qxq4n6x3safp6wglz76gdy93zhpfcw9af29cv3g"
+DONATION_MESSAGE = (
+    "Tired of being ripped off for basic software that should be free? "
+    "Send donations to help fund ad-free/subs-free software for great justice.")
+
 # Qt key -> X11 keysym. Meta maps to Super_L, which macOS treats as Command.
 KEYSYMS = {
     Qt.Key_Backspace: 0xFF08, Qt.Key_Tab: 0xFF09, Qt.Key_Return: 0xFF0D,
@@ -445,17 +452,33 @@ class MainWindow(QMainWindow):
         self.view.setFocus()
 
     def show_about(self):
-        # The GPL asks interactive programs to carry a short warranty notice.
-        QMessageBox.about(
-            self, "About OpenVNCViewer",
+        # Built rather than using QMessageBox.about() so the Bitcoin address is
+        # selectable for copying and the links are actually clickable.
+        about = QMessageBox(self)
+        about.setWindowTitle("About OpenVNCViewer")
+        about.setTextFormat(Qt.RichText)
+        about.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        about.setText(
             f"<b>OpenVNCViewer {__version__}</b>"
-            "<p>A VNC viewer for macOS Screen Sharing that scales the remote "
-            "desktop to whatever size the client window is.</p>"
+            "<p>A VNC viewer that scales the remote desktop to whatever size "
+            "the client window is, for macOS Screen Sharing and standard VNC "
+            "servers.</p>"
+            # The GPL asks interactive programs to carry a warranty notice.
             "<p>Copyright &copy; 2026 The OpenVNCViewer contributors.<br>"
             "This program comes with ABSOLUTELY NO WARRANTY. It is free "
             "software, and you are welcome to redistribute it under the terms "
             "of the GNU General Public License, version 3 or later.</p>"
-            f'<p><a href="{HOMEPAGE}">{HOMEPAGE}</a></p>')
+            f'<p><a href="{HOMEPAGE}">{HOMEPAGE}</a></p>'
+            "<hr>"
+            f"<p>{DONATION_MESSAGE}</p>"
+            "<p>Send Bitcoin:<br>"
+            f'<a href="bitcoin:{DONATION_ADDRESS}" '
+            'style="font-family: monospace;">'
+            f"{DONATION_ADDRESS}</a></p>")
+        # QMessageBox does not always let its label follow links on its own.
+        for label in about.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
+        about.exec()
 
     def prompt_connect(self):
         dialog = ConnectDialog(*self.last_connection, parent=self)
