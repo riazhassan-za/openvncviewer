@@ -223,10 +223,30 @@ claiming any change here is an improvement.
   macOS runner plus a Mac with Screen Sharing enabled).
 - [ ] No coverage measurement, no linter (`ruff`/`flake8`) and no formatter in
   CI.
-- [ ] The ZRLE decoder has no fuzzing. A malformed or hostile stream can raise
-  `IndexError` out of `_read_tile`, which currently just ends the session —
-  acceptable, but it should be a clean protocol error, and the decoder should
-  be checked against out-of-bounds tile writes.
+- [x] **The decoder is hardened against a hostile stream.** Three real problems
+  were found and measured before being fixed:
+
+  | Input | Before | After |
+  | --- | --- | --- |
+  | RLE run longer than its tile | 39 KB produced 40 MB (1021x) | 1x, clamped |
+  | zlib compression bomb | 194 KB expanded to 200 MB | refused |
+  | Rectangle outside the framebuffer | **grew the `bytearray`** | refused |
+
+  The last was the serious one. Slice assignment past the end of a `bytearray`
+  extends it rather than failing, and QImage holds a raw pointer into that
+  buffer — so a malformed rectangle reallocated the framebuffer underneath the
+  view. `_blit` now bounds-checks once per call, which also covers CopyRect
+  sources. Malformed tiles raise `RFBError` rather than escaping as `IndexError`
+  or `ValueError`.
+
+  Cost: palette-RLE decoding went from 21.7 to 19.7 Mpx/s, all of it the run
+  clamp and the palette bounds check. Padding the palette to avoid the check
+  recovers 0.5 Mpx/s and was rejected — it would silently paint a wrong colour
+  instead of reporting malformed data.
+
+- [ ] No property-based or generated fuzzing over the decoder. The cases above
+  were found by reasoning about the code and then measured; a fuzzer would
+  cover the combinations nobody thought of.
 - [x] Benchmarks under `benchmarks/` for the decoder and the paint path, so
   section 4's numbers can be reproduced rather than taken on trust.
 - [ ] The benchmarks are not run in CI, so a performance regression would go
