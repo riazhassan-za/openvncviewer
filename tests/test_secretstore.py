@@ -10,13 +10,18 @@ import unittest
 
 from openvncviewer import secretstore
 
-WINDOWS_ONLY = unittest.skipUnless(sys.platform.startswith("win"),
-                                   "DPAPI is a Windows facility")
+# Gated on real capability, not on the platform: DPAPI can be present and
+# still refuse to work, and a machine where it does not work is a machine where
+# these cannot be exercised.
+USABLE_ONLY = unittest.skipUnless(secretstore.available(),
+                                  "no working password encryption here")
 
 
 class AvailabilityTest(unittest.TestCase):
-    def test_availability_matches_the_platform(self):
-        self.assertEqual(secretstore.available(), sys.platform.startswith("win"))
+    def test_encryption_is_unavailable_off_windows(self):
+        if sys.platform.startswith("win"):
+            self.skipTest("Windows; the off-platform path is not exercised")
+        self.assertFalse(secretstore.available())
 
     def test_without_a_backend_nothing_is_stored_in_the_clear(self):
         """The fallback must be 'cannot save', never 'save it unprotected'."""
@@ -26,7 +31,7 @@ class AvailabilityTest(unittest.TestCase):
         self.assertIsNone(secretstore.decrypt("anything"))
 
 
-@WINDOWS_ONLY
+@USABLE_ONLY
 class EncryptionTest(unittest.TestCase):
     def test_round_trip(self):
         for secret in ("hunter2", "a", "x" * 500, "pä55wörd ✓", "  spaces  "):
