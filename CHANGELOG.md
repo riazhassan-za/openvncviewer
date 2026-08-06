@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Full-screen mode, from **View → Full screen** or **F11**, which hides the
+  menu and status bars and gives the whole screen to the remote desktop.
+  Nothing is renegotiated with the server; the scaler simply has more room.
+  Leaving full screen restores a maximized window as maximized rather than
+  dropping it to a normal one, and any keys held while toggling are released so
+  a modifier cannot stick on the Mac. F11 is reserved by the viewer and is not
+  forwarded to the remote.
+
 ## [0.3.0] - 2026-08-06
 
 ### Changed

@@ -17,7 +17,8 @@
 
 from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF, Qt, QTimer,
                             Signal)
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtGui import (QAction, QColor, QImage, QKeySequence, QPainter,
+                           QPixmap)
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QSlider, QSpinBox,
@@ -396,10 +397,43 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("E&xit", self.close)
 
+        self._was_maximized = False
+        self.fullscreen_action = QAction("&Full screen", self)
+        self.fullscreen_action.setCheckable(True)
+        self.fullscreen_action.setShortcut(QKeySequence(Qt.Key_F11))
+        self.fullscreen_action.setShortcutContext(Qt.ApplicationShortcut)
+        self.fullscreen_action.toggled.connect(self.set_fullscreen)
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.fullscreen_action)
+        # Also owned by the window, so F11 still works once the menu bar is
+        # hidden - otherwise full screen would be a one-way door.
+        self.addAction(self.fullscreen_action)
+
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("&About", self.show_about)
 
         self.last_connection = ("", 5900, "", WHEEL_SPEED_DEFAULT)
+
+    def set_fullscreen(self, enabled):
+        """Give the whole screen to the remote desktop, chrome included.
+
+        The framebuffer is not renegotiated - this only changes how much room
+        the scaler has, so the remote desktop simply gets drawn larger.
+        """
+        # Whatever is held down now would otherwise stick: the remote never
+        # sees the release, because the window is busy changing state.
+        self.view.release_all_keys()
+
+        self.menuBar().setVisible(not enabled)
+        self.statusBar().setVisible(not enabled)
+        if enabled:
+            self._was_maximized = self.isMaximized()
+            self.showFullScreen()
+        elif self._was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self.view.setFocus()
 
     def show_about(self):
         # The GPL asks interactive programs to carry a short warranty notice.
