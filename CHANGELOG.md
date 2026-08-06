@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A donation notice with a Bitcoin address under **Help → About** and in the
+  README. The address is rendered as a `bitcoin:` link and stays selectable so
+  it can be copied. Its bech32 checksum was verified before shipping, since a
+  mistyped address would send donations somewhere unrecoverable.
+
 ## [0.6.0] - 2026-08-06
 
 ### Added

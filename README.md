@@ -277,6 +277,19 @@ Tight/Hextile encodings, no legacy VNC password support, ZRLE decoding is pure
 Python and is the performance bottleneck, HiDPI is untested, and the security
 caveats above.
 
+## Donate
+
+Tired of being ripped off for basic software that should be free? Send
+donations to help fund ad-free/subs-free software for great justice.
+
+Send Bitcoin:
+
+[`bc1qxq4n6x3safp6wglz76gdy93zhpfcw9af29cv3g`](bitcoin:bc1qxq4n6x3safp6wglz76gdy93zhpfcw9af29cv3g)
+
+The same address appears under **Help → About** in the viewer. There is no
+paid tier, no telemetry and nothing withheld — the executable on the releases
+page is the whole program.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and patches welcome —
