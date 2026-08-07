@@ -41,6 +41,12 @@ from ctypes import wintypes
 # looked here first.
 _ENTROPY = b"OpenVNCViewer/servers.json/v1"
 
+# CRYPTPROTECT_UI_FORBIDDEN. Without it DPAPI is allowed to raise a prompt, and
+# in a session with no interactive desktop that blocks forever rather than
+# failing - which is exactly what it did on a CI runner. Failing is the only
+# sane outcome here: there is nobody to answer a dialog.
+_UI_FORBIDDEN = 0x1
+
 
 class _Blob(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD),
@@ -55,17 +61,34 @@ def _load():
         kernel32 = ctypes.WinDLL("kernel32.dll")
     except (OSError, AttributeError):
         return None
-    crypt32.CryptProtectData.restype = wintypes.BOOL
-    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    blob = ctypes.POINTER(_Blob)
+    for function in (crypt32.CryptProtectData, crypt32.CryptUnprotectData):
+        function.restype = wintypes.BOOL
+        # Spelled out rather than left to ctypes' defaults: a pointer passed as
+        # a default int is truncated on 64-bit.
+        function.argtypes = [blob, wintypes.LPCWSTR, blob, ctypes.c_void_p,
+                             ctypes.c_void_p, wintypes.DWORD, blob]
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
     return crypt32, kernel32
 
 
 _LIBS = _load()
+_USABLE = None
 
 
 def available():
-    """Whether passwords can be encrypted at all on this machine."""
-    return _LIBS is not None
+    """Whether a password can actually be encrypted here.
+
+    Probes with a real round trip rather than trusting that the library
+    loaded: DPAPI can be present but refuse to work - a session with no
+    interactive desktop, a broken profile - and reporting it as available
+    would offer a "Save password" box that silently saves nothing.
+    """
+    global _USABLE
+    if _USABLE is None:
+        token = encrypt("probe")
+        _USABLE = token is not None and decrypt(token) == "probe"
+    return _USABLE
 
 
 def _to_blob(data):
@@ -89,8 +112,8 @@ def encrypt(plaintext):
     entropy, _keep_entropy = _to_blob(_ENTROPY)
     result = _Blob()
     ok = crypt32.CryptProtectData(ctypes.byref(source), None,
-                                  ctypes.byref(entropy), None, None, 0,
-                                  ctypes.byref(result))
+                                  ctypes.byref(entropy), None, None,
+                                  _UI_FORBIDDEN, ctypes.byref(result))
     if not ok:
         return None
     return base64.b64encode(_from_blob(result, kernel32)).decode("ascii")
@@ -113,8 +136,8 @@ def decrypt(token):
     entropy, _keep_entropy = _to_blob(_ENTROPY)
     result = _Blob()
     ok = crypt32.CryptUnprotectData(ctypes.byref(source), None,
-                                    ctypes.byref(entropy), None, None, 0,
-                                    ctypes.byref(result))
+                                    ctypes.byref(entropy), None, None,
+                                    _UI_FORBIDDEN, ctypes.byref(result))
     if not ok:
         return None
     try:

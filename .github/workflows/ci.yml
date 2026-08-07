@@ -14,6 +14,9 @@ permissions:
 jobs:
   test:
     runs-on: windows-latest
+    # The suite takes well under a minute. Anything approaching this is a hang,
+    # and without a bound it burns the timeout on every matrix entry at once.
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +37,10 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest discover -s tests -t . -v
+          PYTHONUNBUFFERED: "1"
+        # Unbuffered and verbose so a hang leaves the last test it started
+        # visible in the log rather than an empty buffer.
+        run: python -X faulthandler -m unittest discover -s tests -t . -v
 
   build:
     needs: test
