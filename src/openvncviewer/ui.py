@@ -21,7 +21,8 @@ from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF, QSize,
                             QStandardPaths, Qt, QTimer, Signal)
 from PySide6.QtGui import (QAction, QColor, QImage, QKeySequence, QPainter,
                            QPixmap)
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                               QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPushButton, QSlider,
                                QSpinBox, QVBoxLayout, QWidget)
@@ -79,8 +80,21 @@ WHEEL_CLICK_LIMIT = 500
 POINTER_INTERVAL_MS = 16
 
 
-def _keysym(event):
+# X11 keysyms for the two modifiers whose meaning we may swap.
+SUPER_L = 0xFFEB  # macOS reads this as Command
+ALT_L = 0xFFE9    # macOS reads this as Option
+
+
+def _keysym(event, alt_is_command=False):
     key = event.key()
+    if alt_is_command:
+        # The key beside the space bar is Alt on a PC and Command on a Mac, so
+        # this is the positionally faithful mapping - and the only reachable
+        # one, since Windows swallows most Win+key combinations itself.
+        if key == Qt.Key_Alt:
+            return SUPER_L
+        if key == Qt.Key_Meta:
+            return ALT_L
     if key in KEYSYMS:
         return KEYSYMS[key]
     text = event.text()
@@ -100,6 +114,7 @@ class ClientSignals(QObject):
     resized = Signal(int, int)
     damaged = Signal(int, int, int, int)
     disconnected = Signal(object)
+    clipboard = Signal(str)
 
 
 class RemoteView(QWidget):
@@ -116,6 +131,7 @@ class RemoteView(QWidget):
         self._pressed = {}
         self._pending_motion = None
         self.wheel_speed = WHEEL_SPEED_DEFAULT
+        self.alt_is_command = True
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setAutoFillBackground(False)
@@ -319,6 +335,15 @@ class RemoteView(QWidget):
                 self._client.send_pointer(point.x(), point.y(), self._buttons)
 
     def event(self, event):
+        # Claim the key before Qt decides it is a shortcut. Without this Alt
+        # opens the menu bar and never reaches the remote at all, and Alt+F is
+        # eaten as a menu mnemonic. F11 stays ours, or full screen would be a
+        # one-way door with no way back.
+        if (self._client and event.type() == QEvent.Type.ShortcutOverride
+                and event.key() != Qt.Key_F11):
+            event.accept()
+            return True
+
         # Handled here rather than in keyPressEvent so Tab reaches the remote
         # host instead of moving focus.
         if self._client and event.type() in (QEvent.Type.KeyPress,
@@ -330,13 +355,14 @@ class RemoteView(QWidget):
     def _handle_key(self, event):
         down = event.type() == QEvent.Type.KeyPress
         if down:
-            keysym = _keysym(event)
+            keysym = _keysym(event, self.alt_is_command)
             if keysym is None:
                 return False
             self._pressed[event.key()] = keysym
         else:
             # Release the keysym we pressed: modifiers may have changed since.
-            keysym = self._pressed.pop(event.key(), None) or _keysym(event)
+            keysym = (self._pressed.pop(event.key(), None)
+                      or _keysym(event, self.alt_is_command))
             if keysym is None:
                 return False
         self._client.send_key(keysym, down)
@@ -355,7 +381,8 @@ class RemoteView(QWidget):
 
 class ConnectDialog(QDialog):
     def __init__(self, host="", port=5900, username="",
-                 wheel_speed=WHEEL_SPEED_DEFAULT, history=None, parent=None):
+                 wheel_speed=WHEEL_SPEED_DEFAULT, share_clipboard=True,
+                 alt_is_command=True, history=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Connect to a VNC server")
         self._history = history if history is not None else ServerHistory(
@@ -388,6 +415,24 @@ class ConnectDialog(QDialog):
             "The macOS account password, or the VNC password.\n"
             "Standard VNC passwords are limited to 8 characters by the "
             "protocol; anything longer is ignored.")
+
+        self.alt_is_command = QCheckBox("Send Alt as Command (macOS)")
+        self.alt_is_command.setChecked(alt_is_command)
+        self.alt_is_command.setToolTip(
+            "Alt sits where Command does on a Mac keyboard, so this makes\n"
+            "Alt+C and Alt+V copy and paste on the remote Mac. It is also\n"
+            "the only reachable choice: Windows keeps most Win+key\n"
+            "combinations for itself.\n\n"
+            "Untick for a non-Apple server, where Alt should stay Alt.")
+
+        self.share_clipboard = QCheckBox("Share clipboard with this server")
+        self.share_clipboard.setChecked(share_clipboard)
+        self.share_clipboard.setToolTip(
+            "Copy on either machine, paste on the other.\n"
+            "Note that anything you copy locally is then sent to the server, "
+            "and RFB\ncarries it in the clear. Untick this when that matters."
+            "\n\nmacOS Screen Sharing does not carry the clipboard over RFB, "
+            "so this\nhas no effect when connected to a Mac.")
 
         self.save_password = QCheckBox("Save password for this server")
         if secretstore.available():
@@ -466,6 +511,8 @@ class ConnectDialog(QDialog):
         inner.addWidget(QLabel("Mouse wheel speed"))
         inner.addWidget(self.wheel_speed)
         inner.addLayout(ends)
+        inner.addWidget(self.share_clipboard)
+        inner.addWidget(self.alt_is_command)
         return options
 
     # ------------------------------------------------------------- history
@@ -535,7 +582,9 @@ class ConnectDialog(QDialog):
         return (self.host.currentText().strip(), self.port.value(),
                 self.username.text(), self.password.text(),
                 self.wheel_speed.value(), self.server_name.text().strip(),
-                self.save_password.isChecked())
+                self.save_password.isChecked(),
+                self.share_clipboard.isChecked(),
+                self.alt_is_command.isChecked())
 
 
 class MainWindow(QMainWindow):
@@ -556,6 +605,15 @@ class MainWindow(QMainWindow):
         self.signals.resized.connect(self._on_resize)
         self.signals.damaged.connect(self.view.on_damage)
         self.signals.disconnected.connect(self._on_disconnect)
+        self.signals.clipboard.connect(self._on_remote_clipboard)
+
+        self.share_clipboard = True
+        self._clipboard_primed = False
+        # Text we put on the clipboard ourselves, or last sent. Without this
+        # the server's text lands locally, fires dataChanged, and goes straight
+        # back - an endless round trip on every copy.
+        self._clipboard_echo = None
+        QApplication.clipboard().dataChanged.connect(self._on_local_clipboard)
 
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Connect...", self.prompt_connect)
@@ -635,15 +693,23 @@ class MainWindow(QMainWindow):
                                parent=self)
         if dialog.exec() == QDialog.Accepted:
             (host, port, username, password, wheel_speed, name,
-             save_password) = dialog.values()
+             save_password, share_clipboard, alt_is_command) = dialog.values()
             if host:
                 self.connect_to(host, port, username, password, wheel_speed,
-                                name, save_password)
+                                name, save_password, share_clipboard,
+                                alt_is_command)
 
     def connect_to(self, host, port, username, password,
                    wheel_speed=WHEEL_SPEED_DEFAULT, server_name="",
-                   save_password=False):
+                   save_password=False, share_clipboard=True,
+                   alt_is_command=True):
         self.disconnect()
+        self.share_clipboard = share_clipboard
+        self.view.alt_is_command = alt_is_command
+        # A fresh session has seen none of our clipboard yet, so forget what we
+        # told the last one and offer the current contents once it is up.
+        self._clipboard_echo = None
+        self._clipboard_primed = False
         self.view.wheel_speed = wheel_speed
         self.last_connection = (host, port, username, wheel_speed)
         # Encrypt now, while the password is still in hand. An empty token
@@ -659,6 +725,7 @@ class MainWindow(QMainWindow):
             on_resize=self.signals.resized.emit,
             on_damage=self.signals.damaged.emit,
             on_disconnect=self.signals.disconnected.emit,
+            on_clipboard=self.signals.clipboard.emit,
         )
         self.view.attach(self.client)
         self.client.start()
@@ -678,6 +745,13 @@ class MainWindow(QMainWindow):
             self.history.remember(*self._pending_history)
             self._pending_history = None
 
+        # Anything copied before the session came up was never sent - there was
+        # no connection to send it over - so offer it now. Otherwise you copy
+        # on Windows, connect, and find the remote paste gives you nothing.
+        if not self._clipboard_primed:
+            self._clipboard_primed = True
+            self._on_local_clipboard()
+
         label = self.server_name or (self.client.desktop_name if self.client
                                      else "")
         self.setWindowTitle(f"{label} - OpenVNCViewer" if label
@@ -685,6 +759,26 @@ class MainWindow(QMainWindow):
         where = f"Connected to {label}" if label else "Connected"
         self.status.setText(f"{where} - remote desktop {width}x{height}, "
                             "scaled to window")
+
+    def _on_remote_clipboard(self, text):
+        """The server copied something; mirror it locally."""
+        if not self.share_clipboard or not text:
+            return
+        self._clipboard_echo = text
+        QApplication.clipboard().setText(text)
+
+    def _on_local_clipboard(self):
+        """We copied something; offer it to the server."""
+        if not (self.share_clipboard and self.client):
+            return
+        text = QApplication.clipboard().text()
+        if not text or text == self._clipboard_echo:
+            return  # came from the server, or we already sent it
+        # Only remember it as sent if it actually went. Until the handshake
+        # finishes the client refuses to send, and recording it here would mean
+        # that text was never offered again.
+        if self.client.send_clipboard(text):
+            self._clipboard_echo = text
 
     def _on_disconnect(self, reason):
         self.view.detach()

@@ -530,10 +530,12 @@ class RecentServersTest(unittest.TestCase):
     def test_values_include_the_server_name(self):
         dialog = self.dialog("192.168.0.8")
         dialog.password.setText("secret")
-        host, port, username, password, wheel, name, save = dialog.values()
+        (host, port, username, password, wheel, name, save,
+         clipboard, alt_cmd) = dialog.values()
         self.assertEqual((host, port, username, password, name),
                          ("192.168.0.8", 5900, "someone", "secret", "Studio Mac"))
         self.assertFalse(save, "nothing was saved for this server")
+        self.assertTrue(clipboard, "clipboard sharing defaults on")
 
     def test_a_saved_password_is_restored_and_the_box_ticked(self):
         if not secretstore.available():
@@ -691,6 +693,9 @@ class RecentServersTest(unittest.TestCase):
             def stop(self):
                 pass
 
+            def send_clipboard(self, text):
+                return True
+
         original = ui_module.RFBClient
         ui_module.RFBClient = DummyClient
         self.addCleanup(setattr, ui_module, "RFBClient", original)
@@ -792,7 +797,8 @@ class ConnectDialogTest(unittest.TestCase):
         dialog.server_name.setText("Studio")
         self.assertEqual(
             dialog.values(),
-            ("mac.local", 5901, "someone", "secret", 7, "Studio", False))
+            ("mac.local", 5901, "someone", "secret", 7, "Studio", False,
+             True, True))
 
 
 if __name__ == "__main__":
