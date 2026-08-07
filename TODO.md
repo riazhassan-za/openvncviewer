@@ -139,8 +139,39 @@ today.
   bring transport encryption to non-Apple servers.
 - [ ] Only the security type of Tight is missing; the **Tight encoding** is a
   separate item above and would cut bandwidth on photographic content.
-- [ ] **No clipboard synchronisation** in either direction. `ServerCutText` is
-  read off the wire and discarded.
+- [x] **Clipboard synchronisation works in both directions**, on by default,
+  with a per-session tick in the connect dialog. Windows CRLF is converted to
+  the bare LF the protocol requires and back.
+
+  Fixed while doing it: `ServerCutText` read a server-chosen `u32` length with
+  no bound at all, so a server could declare 4GB and the client would try to
+  read it. Text is now refused above a hard limit and dropped (rather than
+  ending the session) above a smaller practical one.
+
+- [ ] **macOS Screen Sharing does not carry the clipboard over RFB at all**, in
+  either direction, so the feature does nothing when connected to a Mac. This
+  is settled, not suspected. A traced session against macOS 14 showed
+  `ClientCutText` leaving correctly with the handshake complete and being
+  ignored by the pasteboard, and *no* `ServerCutText` arriving across a whole
+  session of copying on the Mac — while the same build round-trips both
+  directions against a standard VNC server. Apple's own client uses a private
+  channel. Nothing in the RFB specification reaches the macOS pasteboard, so
+  there is no fix here short of reverse-engineering that channel, which is out
+  of scope.
+
+  Worth recording because it cost two rounds of debugging correct code: an
+  early conclusion that "incoming works" came from a trace taken against the
+  Windows server, not the Mac. Check which host is connected before drawing a
+  conclusion about a host.
+
+- [ ] **Clipboard text is limited to Latin-1**, so emoji and CJK are replaced
+  with `?`. The Extended Clipboard pseudo-encoding (`0xc0a1e5ce`) would carry
+  UTF-8, and is worth doing for standard VNC servers. It is moot for macOS,
+  which does not do RFB clipboard at all.
+
+- [ ] `ConnectDialog.values()` now returns an eight-item positional tuple, and
+  every option added to it has broken the same two tests. A named tuple would
+  cost little and stop that recurring.
 - [ ] **No cursor pseudo-encodings.** The server renders the pointer into the
   framebuffer, which is what we want for a scaled view, but it means the local
   cursor and the remote cursor can visibly disagree during fast movement.
@@ -212,9 +243,18 @@ claiming any change here is an improvement.
 - [ ] **The keysym table is partial.** `ui.py::KEYSYMS` covers ASCII, the
   common navigation and modifier keys, and F1-F12. International layouts, dead
   keys, IME composition and the numeric keypad have not been tested.
-- [ ] The Meta/Windows key is mapped to `Super_L` so macOS reads it as Command,
-  and Alt maps to `Alt_L` for Option. This is a reasonable default but is not
-  configurable, and no key-remapping UI exists.
+- [x] **Alt maps to Command by default**, via a tick in the connect dialog, so
+  Alt+C and Alt+V work on a remote Mac. Alt sits where Command does on a Mac
+  keyboard, and it is the only reachable choice: Command was previously on the
+  Windows key, which Windows largely keeps for itself. Unticking reverts to
+  Alt=Option, Win=Command for non-Apple servers.
+
+- [x] **Modifiers reach the remote rather than the local menu bar.** The view
+  claims `ShortcutOverride` for every key except F11; without that, Alt opened
+  the menu bar and never reached the server at all, and Alt+F was eaten as a
+  menu mnemonic.
+
+- [ ] Beyond that single tick there is still no general key-remapping UI.
 - [ ] There is no way to send Ctrl-Alt-Del, Command-Tab, or other combinations
   that the local window manager swallows before Qt sees them.
 - [ ] **No keyboard grab.** Full-screen mode exists (section 6), but Windows

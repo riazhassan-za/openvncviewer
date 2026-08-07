@@ -40,6 +40,12 @@ ENC_DESKTOP_SIZE = -223
 
 BYTES_PER_PIXEL = 4
 
+# Clipboard text larger than this is dropped rather than shared - it is not
+# what anyone means by a clipboard. Beyond the hard limit the server is
+# misbehaving and the session ends.
+MAX_CLIPBOARD_BYTES = 1024 * 1024
+CLIPBOARD_HARD_LIMIT = 16 * 1024 * 1024
+
 # Diffie-Hellman limits for ARD authentication. macOS Screen Sharing offers a
 # 4096-bit group with generator 5; the floor is well below that because older
 # releases may not, and the ceiling only exists to stop a server forcing
@@ -74,6 +80,37 @@ def _ignore(*args):
     """Callback stand-in for a client that has been stopped."""
 
 
+def _clean_text(text):
+    """RFB clipboard text uses a bare LF; CR must not appear at all.
+
+    Some Windows applications also put a NUL-terminated string on the
+    clipboard. The terminator is not part of the text and has no business on
+    the wire, so drop it rather than forward it to a server that may be
+    stricter about it than we are.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.rstrip("\x00")
+
+
+def decode_clipboard(data):
+    """Wire bytes to text.
+
+    The base protocol specifies ISO 8859-1, which cannot decode-fail, so there
+    is nothing to guard against here beyond the newline convention.
+    """
+    return _clean_text(data.decode("latin-1"))
+
+
+def encode_clipboard(text):
+    """Text to wire bytes.
+
+    Anything outside Latin-1 - emoji, CJK - has no representation in the base
+    protocol and becomes "?". Substituting beats refusing to share the rest of
+    the text, and beats sending mojibake the far side would paste.
+    """
+    return _clean_text(text).encode("latin-1", "replace")
+
+
 def _reverse_bits(byte):
     byte = ((byte & 0xF0) >> 4) | ((byte & 0x0F) << 4)
     byte = ((byte & 0xCC) >> 2) | ((byte & 0x33) << 2)
@@ -106,7 +143,7 @@ class RFBClient:
     """
 
     def __init__(self, host, port, username, password,
-                 on_resize, on_damage, on_disconnect):
+                 on_resize, on_damage, on_disconnect, on_clipboard=None):
         self.host = host
         self.port = port
         self.username = username
@@ -114,6 +151,7 @@ class RFBClient:
         self._on_resize = on_resize
         self._on_damage = on_damage
         self._on_disconnect = on_disconnect
+        self._on_clipboard = on_clipboard or _ignore
 
         self.width = 0
         self.height = 0
@@ -142,6 +180,7 @@ class RFBClient:
         # report the disconnect, and by then the caller may already have
         # started a new session that this one must not clobber.
         self._on_resize = self._on_damage = self._on_disconnect = _ignore
+        self._on_clipboard = _ignore
         if self._sock is not None:
             self._sock.close()
 
@@ -341,7 +380,17 @@ class RFBClient:
             pass
         elif msg == 3:  # ServerCutText
             length = struct.unpack("!3xI", self._read(7))[0]
-            self._read(length)
+            # The length is an unbounded u32 off the wire. Left unchecked a
+            # server could declare 4GB and we would try to read it.
+            if length > CLIPBOARD_HARD_LIMIT:
+                raise RFBError(
+                    f"server announced a {length}-byte clipboard; refusing "
+                    f"anything over {CLIPBOARD_HARD_LIMIT} bytes")
+            data = self._read(length)
+            # Between the two limits it is real but too large to be worth
+            # putting on a clipboard, so drop it rather than end the session.
+            if length <= MAX_CLIPBOARD_BYTES:
+                self._on_clipboard(decode_clipboard(data))
         else:
             raise RFBError(f"unsupported server message type {msg}")
 
@@ -556,6 +605,22 @@ class RFBClient:
     def send_key(self, keysym, down):
         if self._ready:
             self._send(struct.pack("!BB2xI", 4, 1 if down else 0, keysym))
+
+    def send_clipboard(self, text):
+        """Offer our clipboard to the server as ClientCutText.
+
+        Reports whether it actually went. The caller remembers what it sent to
+        break the echo loop, and must not record text that never left - during
+        the handshake `_ready` is still False, and text marked sent but dropped
+        would never be offered again.
+        """
+        if not self._ready:
+            return False
+        data = encode_clipboard(text)
+        if not data or len(data) > MAX_CLIPBOARD_BYTES:
+            return False
+        self._send(struct.pack("!B3xI", 6, len(data)) + data)
+        return True
 
 
 def _is_probable_prime(candidate, rounds=MILLER_RABIN_ROUNDS):

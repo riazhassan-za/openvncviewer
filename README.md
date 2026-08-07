@@ -170,6 +170,36 @@ that file cannot decrypt anything — it only stores an opaque token. On a
 platform without DPAPI the option is **disabled** rather than falling back to a
 key kept next to the ciphertext, which would be obfuscation, not encryption.
 
+## Clipboard
+
+Copy on either machine and paste on the other. **Share clipboard with this
+server** is in the Options group of the connect dialog and is **on by default**.
+
+> **macOS Screen Sharing does not carry the clipboard over RFB**, in either
+> direction, so this option has no effect when connected to a Mac. Apple's own
+> client shares the clipboard over a private channel rather than the standard
+> `ClientCutText`/`ServerCutText` messages. Verified against macOS 14 with a
+> traced session: outgoing messages leave correctly and are ignored, and no
+> incoming message ever arrives — while the identical code round-trips both
+> directions against a standard VNC server. There is no documented RFB way to
+> reach the macOS pasteboard, so this is not something the viewer can fix.
+
+Against standard VNC servers it works in both directions. Two things worth
+knowing there, both inherent to the base RFB protocol:
+
+- **Anything you copy locally is sent to the server**, and RFB carries it in
+  the clear. Copy a password on this machine and it goes over the wire to
+  whatever you are connected to. Untick the box when that matters.
+- **Clipboard text is Latin-1.** Plain text and accented characters survive;
+  emoji and CJK have no representation and are replaced with `?`. That is the
+  protocol, not this viewer. The Extended Clipboard pseudo-encoding would give
+  UTF-8 — see [TODO.md](TODO.md) §3.
+
+Windows CRLF line endings are converted to the bare LF the protocol requires,
+and back, so pasted text does not arrive with doubled or missing line breaks.
+A trailing NUL — which some Windows applications leave on the clipboard — is
+stripped rather than forwarded. Text over 1 MB is not shared.
+
 ## Full screen
 
 **View → Full screen**, or **F11**, hands the whole screen to the remote
@@ -180,10 +210,29 @@ desktop is drawn larger.
 Two things worth knowing:
 
 - **F11 is reserved by the viewer** and is therefore not forwarded to the Mac.
-  It is the only key treated this way.
+  It is the only key treated this way — every other key, Alt included, is
+  claimed for the remote rather than left to open a menu.
 - There is **no keyboard grab**, so Windows still intercepts Alt+Tab, the
   Windows key and Ctrl+Alt+Del even in full screen. `Cmd+Tab` on the Mac is
   reachable only if Windows does not claim the combination first.
+
+## Modifier keys
+
+**Send Alt as Command (macOS)** is in the Options group and **on by default**,
+so Alt+C and Alt+V copy and paste on the remote Mac. Two reasons:
+
+- The key beside the space bar is Alt on a PC and **Command** on a Mac, so this
+  is the positionally faithful mapping.
+- It is the only one that actually works. Command was previously on the Windows
+  key, and Windows keeps most Win+key combinations for itself — Win+V opens
+  clipboard history rather than reaching the viewer.
+
+With it on, the Windows key sends Option. **Untick it for a non-Apple server**,
+where Alt should stay Alt.
+
+While connected the viewer claims every keystroke except F11, so Alt reaches
+the remote instead of opening the local menu bar. The menus remain available
+with the mouse.
 
 ## Mouse wheel speed
 
@@ -340,10 +389,9 @@ take.
 
 ## Known limitations
 
-See **[TODO.md](TODO.md)**. The short version: no clipboard sync, no
-Tight/Hextile encodings, no legacy VNC password support, ZRLE decoding is pure
-Python and is the performance bottleneck, HiDPI is untested, and the security
-caveats above.
+See **[TODO.md](TODO.md)**. The short version: no Tight/Hextile encodings,
+clipboard sharing does not work against macOS (see above), ZRLE decoding is
+pure Python and is the performance bottleneck, and the security caveats above.
 
 ## Donate
 

@@ -6,6 +6,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Clipboard sharing in both directions**, on by default, with a *Share
+  clipboard with this server* tick in the connect dialog's Options group. Copy
+  on either machine, paste on the other.
+
+  Two caveats stated plainly rather than buried: anything copied locally is
+  **sent to the server over plaintext RFB**, so untick it when that matters;
+  and the base protocol carries **Latin-1 only**, so emoji and CJK become `?`.
+  Windows CRLF is converted to the bare LF the protocol requires, and back.
+
+  **This does not work against macOS**, which does not carry the clipboard over
+  RFB in either direction — see below.
+
+- **Alt is sent as Command by default**, so Alt+C and Alt+V copy and paste on
+  a remote Mac. Alt sits where Command does on a Mac keyboard, and it is the
+  only reachable choice — Command was previously on the Windows key, and
+  Windows keeps most Win+key combinations for itself. A tick in the connect
+  dialog reverts it for non-Apple servers.
+
+### Fixed
+
+- **Alt opened the local menu bar instead of reaching the remote.** Qt offers
+  each keystroke to shortcuts before the focused widget, so Alt activated the
+  menu bar and Alt+F was eaten as a mnemonic. The view now claims
+  `ShortcutOverride` for every key except F11, which stays reserved so full
+  screen does not become a one-way door.
+
+- **`ServerCutText` read an unbounded length off the wire.** The length is a
+  server-chosen `u32`, so a hostile server could declare 4GB and the client
+  would attempt to read it — the same class of problem as the ZRLE bomb fixed
+  in 0.6.0, sitting in the path this feature turns on. Oversized text is now
+  dropped, and an absurd length ends the session before anything is read.
+
+- **A NUL terminator left on the Windows clipboard by some applications was
+  forwarded to the server.** Observed on a live session. It is not part of the
+  text and is now stripped in both directions.
+
+### Known limitation
+
+- **macOS Screen Sharing does not carry the clipboard over RFB**, in either
+  direction, so the new option has no effect when connected to a Mac. A traced
+  session shows `ClientCutText` leaving correctly and being ignored, and no
+  `ServerCutText` ever arriving, while the same build round-trips both
+  directions against a standard VNC server. Apple's client uses a private
+  channel. Documented in the README, the TODO and the option's tooltip so it is
+  not mistaken for a bug in this viewer.
+
 ## [0.8.2] - 2026-08-07
 
 ### Changed
