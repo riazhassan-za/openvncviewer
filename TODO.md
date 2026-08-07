@@ -207,10 +207,31 @@ claiming any change here is an improvement.
 - [ ] **Aspect ratio is always preserved** (letterboxed or pillarboxed). There
   is no stretch-to-fill option and no 1:1 / no-scaling mode with scrollbars,
   both of which some users prefer.
-- [ ] **HiDPI behaviour is untested.** With Windows display scaling at anything
-  other than 100%, the mapping in `RemoteView._remote_point` uses logical
-  pixels; whether clicks land correctly at 150%/200% has not been checked.
-  This matters more than usual given scaling is the headline feature.
+- [x] **HiDPI is handled and tested.** The cached pixmap is allocated in device
+  pixels with `devicePixelRatio` set on it, so the remote desktop is drawn at
+  the resolution the screen can actually show.
+
+  The original note here guessed wrong about what was at risk. It suspected
+  **clicks**; those were always exact, because `target_rect()` and the mouse
+  position are both in logical pixels and the scale factor cancels. The real
+  fault was **resolution**: the pixmap was sized in logical pixels, so at
+  higher scalings it held a fraction of the pixels the display could show and
+  Qt stretched the difference.
+
+  | Display scaling | Pixmap coverage before | After |
+  | --- | --- | --- |
+  | 100% | 97% | 97% |
+  | 150% | 64% | 97% |
+  | 200% | 48% | 97% |
+
+  Measured, not assumed: `tests/test_hidpi.py` drives a child process per
+  scale factor, since Qt reads `QT_SCALE_FACTOR` once when the QApplication is
+  built and it cannot be changed mid-run.
+
+- [ ] The cost of the above is a pixmap with `ratio**2` more pixels, so a full
+  rescale at 200% does roughly four times the work. Damage-limited repainting
+  keeps the common case cheap, but there is no benchmark that runs at a scale
+  factor, so that multiplier is reasoned rather than measured.
 - [x] Full-screen mode via **View → Full screen** or **F11**, hiding the menu
   and status bars. Restores a maximized window as maximized, and releases held
   keys on toggle so a modifier cannot stick on the remote.

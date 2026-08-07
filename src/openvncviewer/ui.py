@@ -17,7 +17,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF,
+from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QRectF, QSize,
                             QStandardPaths, Qt, QTimer, Signal)
 from PySide6.QtGui import (QAction, QColor, QImage, QKeySequence, QPainter,
                            QPixmap)
@@ -188,8 +188,22 @@ class RemoteView(QWidget):
             self._scaled = None
             return None
 
-        if self._scaled is None or self._scaled.size() != target.size():
-            self._scaled = QPixmap(target.size())
+        # Allocate in device pixels, not logical ones. At 150% or 200% display
+        # scaling a logical-sized pixmap holds well under half the pixels the
+        # screen can show, and Qt stretches it - the remote desktop arrives
+        # sharp and gets blurred on the way to the glass.
+        #
+        # Setting devicePixelRatio on the pixmap keeps every coordinate below
+        # logical: QPainter scales by the ratio itself, so the destination
+        # maths and the returned repaint rect need no adjustment.
+        ratio = self.devicePixelRatioF()
+        device_size = QSize(round(target.width() * ratio),
+                            round(target.height() * ratio))
+        if (self._scaled is None
+                or self._scaled.size() != device_size
+                or self._scaled.devicePixelRatio() != ratio):
+            self._scaled = QPixmap(device_size)
+            self._scaled.setDevicePixelRatio(ratio)
             region = None  # nothing valid to keep, so rebuild it all
 
         if region is None:
