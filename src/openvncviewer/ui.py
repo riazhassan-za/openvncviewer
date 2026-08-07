@@ -667,10 +667,10 @@ class MainWindow(QMainWindow):
         about.setTextFormat(Qt.RichText)
         about.setTextInteractionFlags(Qt.TextBrowserInteraction)
         about.setText(
-            f"<b>OpenVNCViewer {__version__}</b>"
-            "<p>A VNC viewer that scales the remote desktop to whatever size "
-            "the client window is, for macOS Screen Sharing and standard VNC "
-            "servers.</p>"
+            f"<b>OpenVNCViewer for Windows {__version__}</b>"
+            "<p>A VNC viewer for 64-bit Windows, with support for macOS Screen "
+            "Sharing and standard VNC servers. It scales the remote desktop to "
+            "whatever size the client window is.</p>"
             # The GPL asks interactive programs to carry a warranty notice.
             "<p>Copyright &copy; 2026 The OpenVNCViewer contributors.<br>"
             "This program comes with ABSOLUTELY NO WARRANTY. It is free "
