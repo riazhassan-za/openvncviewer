@@ -118,6 +118,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Needed for CHANGELOG.md; checks out the tag that triggered this run.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -128,16 +131,60 @@ jobs:
           cd artifacts
           sha256sum OpenVNCViewer-*.exe | tee SHA256SUMS.txt
 
+      - name: Build the release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+
+          # Everything between this version's heading and whatever ends it:
+          # the next version heading, or the link-reference block if this is
+          # the oldest section in the file. index() rather than a dynamic
+          # regex - the version's dots and the literal brackets both need
+          # escaping there, and "[0.9.1]" quietly becomes a character class.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1    { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found && /^\[.*\]: http/        { exit }
+            found                           { print }
+          ' CHANGELOG.md > section.md
+
+          # A tag with no changelog section means the release would go out
+          # describing nothing. Fail here rather than publish that: add the
+          # section, delete the tag, and push it again. Checked before the
+          # trim below, which would turn an empty file into a one-byte one.
+          if [ ! -s section.md ]; then
+            echo "::error file=CHANGELOG.md::No '## [$version]' section found. \
+          Add one before tagging v$version."
+            exit 1
+          fi
+
+          # Drop the blank lines the split leaves at either end.
+          sed -e '/./,$!d' section.md | tac | sed -e '/./,$!d' | tac > notes.md
+
+          cat >> notes.md <<'EOF'
+
+          ---
+
+          ### Download
+
+          `OpenVNCViewer-x64.exe` is a single file with Python, PySide6 and
+          cryptography bundled. Nothing to install.
+
+          Requires **64-bit Windows 10 (1809+) or Windows 11**. Verify your
+          download against `SHA256SUMS.txt`.
+
+          The build is unsigned, so SmartScreen will warn on first run.
+
+          32-bit Windows, Windows 7/8 and ARM64 are not supported. See
+          TODO.md section 2 for why each is blocked.
+          EOF
+
+          echo "--- release notes ---"
+          cat notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/OpenVNCViewer-*.exe
             artifacts/SHA256SUMS.txt
-          body: |
-            Unsigned Windows builds. SmartScreen will warn on first run.
-
-            `OpenVNCViewer-x64.exe` requires 64-bit Windows 10 (1809+) or
-            Windows 11. Verify it against `SHA256SUMS.txt`.
-
-            32-bit Windows, Windows 7/8 and ARM64 are not supported. See
-            TODO.md section 2 for why each is blocked.
+          body_path: notes.md
