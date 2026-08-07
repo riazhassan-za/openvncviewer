@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-07
+
 ### Added
 
 - **Recently connected servers are remembered between runs.** The Host box is
@@ -53,6 +55,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The viewport is cleared on disconnect, along with the window title. A stale
   last frame under a title naming the server implies a session that has ended.
+
+### Fixed
+
+- DPAPI could block indefinitely instead of failing. `CryptProtectData` was
+  called with `dwFlags=0`, which permits it to raise a UI prompt; in a session
+  with no interactive desktop that waits forever. It now passes
+  `CRYPTPROTECT_UI_FORBIDDEN`, so it fails rather than hangs — the only sane
+  outcome when there is nobody to answer a dialog. Found because it hung CI on
+  all five Python versions.
+
+  `secretstore.available()` now probes with a real encrypt/decrypt round trip
+  rather than reporting that the library loaded, since DPAPI can be present and
+  still refuse to work; claiming availability there would offer a "Save
+  password" box that silently saved nothing.
 
 ## [0.7.0] - 2026-08-06
 
@@ -223,7 +239,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.4.0...v0.5.0
