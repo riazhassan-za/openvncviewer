@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Release assets are now named per architecture (`OpenVNCViewer-x64.exe`) and
+  accompanied by a CI-generated `SHA256SUMS.txt`, so a download can be verified
+  without trusting the release notes. The build verifies the PE header of what
+  it produced rather than trusting the runner label, and publishing moved to
+  its own job so a tag releases only once the build has succeeded.
+
+- Documented, after checking PyPI rather than assuming, why three platforms are
+  not offered. Previous notes claimed 32-bit and Windows 7/8 "only need a
+  rebuild with an older/32-bit interpreter", which was wrong and would have
+  sent someone down a dead end.
+
+  - **32-bit** — PySide6 has never published a `win32` wheel, in any release.
+  - **Windows 7/8** — Qt 6 requires Windows 10, so even x64 cannot run there.
+  - **ARM64** — PySide6 does publish `win_arm64`, but `cryptography` shipped a
+    Windows ARM64 wheel only in 46.0.0-46.0.3 and dropped it. Attempted on a
+    `windows-11-arm` runner: the build fails installing `cryptography`, which
+    falls back to compiling from source and wants Rust and OpenSSL. Shipping it
+    would mean pinning a crypto library four major versions behind in an
+    application that handles account passwords.
+
 ## [0.8.1] - 2026-08-07
 
 ### Fixed

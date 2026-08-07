@@ -48,14 +48,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # One entry today, but kept as a matrix because the architecture is
+        # threaded through the artifact name and the PE check below.
+        #
+        # Why there is nothing else here, so nobody re-derives it:
+        #   32-bit  - PySide6 has never published a win32 wheel, in any release.
+        #   Win 7/8 - Qt 6 requires Windows 10, so even x64 cannot run there.
+        #   ARM64   - PySide6 does publish win_arm64, but cryptography only did
+        #             for 46.0.0-46.0.3 and dropped it. Building ARM64 means
+        #             shipping a crypto library four major versions behind, in
+        #             an app that handles account passwords. Not worth it.
         include:
           - arch: x64
             runner: windows-latest
-          # PySide6 publishes a win_arm64 wheel, so this needs no source
-          # changes. There is no 32-bit entry and cannot be: PySide6 has never
-          # shipped a win32 wheel, and Qt 6 requires Windows 10 regardless.
-          - arch: arm64
-            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -131,8 +136,8 @@ jobs:
           body: |
             Unsigned Windows builds. SmartScreen will warn on first run.
 
-            - `OpenVNCViewer-x64.exe` - 64-bit Windows 10 (1809+) or Windows 11
-            - `OpenVNCViewer-arm64.exe` - Windows on ARM
+            `OpenVNCViewer-x64.exe` requires 64-bit Windows 10 (1809+) or
+            Windows 11. Verify it against `SHA256SUMS.txt`.
 
-            32-bit Windows and Windows 7/8 are not supported: PySide6 ships no
-            32-bit wheel, and Qt 6 requires Windows 10.
+            32-bit Windows, Windows 7/8 and ARM64 are not supported. See
+            TODO.md section 2 for why each is blocked.

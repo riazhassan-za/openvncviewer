@@ -71,18 +71,22 @@ connected to.
 Download from the
 [latest release](https://github.com/riazhassan-za/openvncviewer/releases):
 
-| File | For |
-| --- | --- |
-| `OpenVNCViewer-x64.exe` | 64-bit Windows 10 (1809+) or Windows 11 |
-| `OpenVNCViewer-arm64.exe` | Windows on ARM (Surface, Snapdragon) |
+`OpenVNCViewer-x64.exe` — a single file with Python, PySide6 and cryptography
+bundled, for 64-bit Windows 10 (1809+) or Windows 11. Nothing to install. It is
+unsigned, so SmartScreen will warn on first run; `SHA256SUMS.txt` on the release
+lets you verify what you downloaded.
 
-Each is a single file with Python, PySide6 and cryptography bundled — nothing
-to install. They are unsigned, so SmartScreen will warn on first run.
-`SHA256SUMS.txt` on the release lets you verify what you downloaded.
+**32-bit Windows, Windows 7/8 and ARM64 are not supported**, and none of those
+is an oversight:
 
-**32-bit Windows and Windows 7/8 are not supported.** That is a Qt limitation,
-not an oversight: PySide6 has never published a 32-bit wheel, and Qt 6 requires
-Windows 10. See [TODO.md](TODO.md) §2.
+- **32-bit** — PySide6 has never published a 32-bit wheel, in any release.
+- **Windows 7/8** — Qt 6 requires Windows 10, so even a 64-bit build cannot run.
+- **ARM64** — PySide6 does publish an ARM64 wheel, but `cryptography` dropped
+  its Windows ARM64 wheel after 46.0.3. Building it would mean shipping a
+  crypto library four major versions behind in an app that handles passwords.
+
+[TODO.md](TODO.md) §2 has the detail, including what supporting them would
+take.
 
 ### From source
 
@@ -326,8 +330,8 @@ Produces `dist\OpenVNCViewer.exe` (~49 MB). The spec excludes the PySide6
 modules the viewer never touches (WebEngine, Quick, 3D, Multimedia and
 friends), which is most of the download size.
 
-You get a binary for whatever architecture you build on. CI builds x64 and
-ARM64 and names each per architecture.
+You get a binary for whatever architecture you build on; CI builds x64 and
+names it per architecture.
 
 A 32-bit or Windows 7/8 build is **not** a matter of choosing a different
 interpreter: PySide6 has never published a 32-bit wheel, and Qt 6 requires
