@@ -6,20 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "openvncviewer"
 # Single source of truth: openvncviewer.__version__ (see tool.setuptools.dynamic).
 dynamic = ["version"]
-description = "A VNC viewer that scales the remote desktop to the client window, with macOS Screen Sharing and standard VNC password login"
+description = "A VNC viewer for 64-bit Windows, with support for macOS Screen Sharing and standard VNC servers, that scales the remote desktop to the client window"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "The OpenVNCViewer contributors" }]
-keywords = ["vnc", "rfb", "macos", "screen-sharing", "remote-desktop", "ard"]
+keywords = ["vnc", "rfb", "windows", "macos", "screen-sharing", "remote-desktop", "ard"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Environment :: X11 Applications :: Qt",
+    "Environment :: Win32 (MS Windows)",
     "Intended Audience :: End Users/Desktop",
     # No "License ::" classifier: it is invalid alongside the PEP 639
     # `license` expression above, and setuptools rejects the combination.
-    "Operating System :: Microsoft :: Windows",
+    # Windows x64 is the supported target, not an accident of packaging: Qt 6
+    # needs Windows 10, PySide6 ships no win32 wheel, and saved-password
+    # encryption is DPAPI. See README "Platform support".
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
     "Programming Language :: Python :: 3",
     "Topic :: System :: Networking",
 ]

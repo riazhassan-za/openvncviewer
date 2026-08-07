@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Documented as what it is: a VNC viewer for 64-bit Windows**, with support
+  for macOS Screen Sharing and standard VNC servers. Nothing about the software
+  changed — the positioning did. It began as a viewer that could in principle
+  run anywhere Python does, and in practice Qt 6, PySide6's wheel coverage and
+  DPAPI password storage have settled it on Windows x64. Saying so up front
+  beats letting somebody discover it after a download.
+
+  A new **Platform support** section in the README separates the two questions
+  that were being conflated: what the viewer *runs on* (Windows x64 only) and
+  what it *connects to* (macOS Screen Sharing and standard VNC servers on any
+  OS). TODO §2 now opens with that scope, and the note about macOS and Linux
+  builds is recorded as a decision rather than an open gap — with the three
+  things a porter would hit first.
+
+  Also corrected: the package metadata carried
+  `Environment :: X11 Applications :: Qt`, an X11 classifier on a Windows-only
+  application, and a generic Windows classifier where 10 and 11 are meant.
+
 ## [0.9.0] - 2026-08-07
 
 ### Added

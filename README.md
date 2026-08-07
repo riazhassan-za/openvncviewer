@@ -1,12 +1,16 @@
-# OpenVNCViewer
+# OpenVNCViewer for Windows
+
+**A VNC viewer for 64-bit Windows, with support for macOS Screen Sharing and
+standard VNC servers.**
 
 [![CI](https://github.com/riazhassan-za/openvncviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/riazhassan-za/openvncviewer/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-0078D6.svg)](#platform-support)
 
-A VNC viewer that scales the remote desktop to whatever size the client window
-happens to be. It logs in to **macOS Screen Sharing** with a real macOS account
-name and password, and also connects to **standard VNC servers** using the
-ordinary VNC password.
+It scales the remote desktop to whatever size the client window happens to be.
+It logs in to **macOS Screen Sharing** with a real macOS account name and
+password, and also connects to **standard VNC servers** using the ordinary VNC
+password.
 
 Most viewers make you choose between a 1:1 window the size of the Mac's display
 and a scrollable viewport. This one always fits the desktop to the window,
@@ -39,14 +43,39 @@ fight that, this exists.
 
 ## Requirements
 
-- 64-bit Windows 10 (1809 or later) or Windows 11
-- Either:
-  - a Mac with **System Settings → General → Sharing → Screen Sharing**
-    enabled and your account allowed access, or
-  - any VNC server offering password authentication or no authentication
+**This is a Windows x64 application.** It runs on 64-bit Windows 10 (1809 or
+later) and Windows 11, and nothing else — see [Platform support](#platform-support)
+below for exactly what that rules out and why.
+
+Connect it to either:
+
+- a Mac with **System Settings → General → Sharing → Screen Sharing**
+  enabled and your account allowed access, or
+- any VNC server offering password authentication or no authentication
 
 For a Mac, the legacy "VNC viewers may control screen with password" option is
 **not** needed — the viewer logs in with the account itself.
+
+## Platform support
+
+| | |
+| --- | --- |
+| **This viewer runs on** | 64-bit (x64) Windows 10 1809+ and Windows 11 |
+| **It connects to** | macOS Screen Sharing, and standard VNC servers on any OS |
+
+Two separate things, worth not confusing. The **viewer** is a Windows x64
+application and is not built for anything else. What it **talks to** is
+unrestricted — a VNC server is a VNC server whether it runs on macOS, Linux or
+Windows.
+
+The code beneath the UI is portable Python and carries no Windows assumptions
+in the protocol layer, but only Windows has been exercised, the keyboard
+mapping assumes a PC keyboard, and saved-password encryption is Windows DPAPI.
+Treat "Windows x64" as the supported target, not an accident of packaging.
+
+See [Install](#prebuilt-executable) for which Windows versions and
+architectures are ruled out, and [TODO.md](TODO.md) §2 for what changing that
+would take.
 
 ## Which servers work
 
