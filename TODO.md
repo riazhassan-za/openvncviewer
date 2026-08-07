@@ -397,42 +397,45 @@ claiming any change here is an improvement.
 
 ## 9. Repository and release process
 
-- [ ] **`main` is unprotected.** Anyone with write access can push straight to
-  it, and nothing forces a pull request or a passing build. This is *not* an
-  oversight: both classic branch protection and the newer rulesets are refused
-  on a private repository under a GitHub Free plan —
+- [x] **`main` is protected by the "Protect main" ruleset**, live since the
+  repository went public (rulesets are refused on a private repository under a
+  GitHub Free plan, which is why this was deferred rather than worked around).
+  `.github/branch-protection.json` is the source of truth and can be reapplied
+  in one command:
 
   ```
-  403 Upgrade to GitHub Pro or make this repository public to enable this feature.
-  ```
-
-  It becomes available at no cost the moment the repository goes public, so it
-  is deferred until then rather than worked around.
-
-- [x] The ruleset is written and committed, ready to apply in one command once
-  the repository is public (or the plan is upgraded):
-
-  ```
-  gh api --method POST repos/riazhassan-za/openvncviewer/rulesets \
+  gh api --method PUT repos/riazhassan-za/openvncviewer/rulesets/20514270 \
          --input .github/branch-protection.json
   ```
 
-  It requires a pull request with one approving review from a code owner,
-  demands the five CI test jobs pass and be up to date with `main`, requires
-  review threads to be resolved, dismisses stale approvals on new pushes, and
-  blocks deletion and force-pushes of `main`.
+  It forces a pull request, demands the five CI test jobs pass and be up to
+  date with `main`, requires review threads to be resolved, dismisses stale
+  approvals on new pushes, and blocks deletion and force-pushes of `main`.
 
-- [x] `.github/CODEOWNERS` assigns every path to `@riazhassan-za`, so the
-  required approval must come from the maintainer rather than any contributor
-  with write access.
+- [x] **The mandatory approving review was removed, deliberately.** It was
+  originally one approving review from a code owner. On a personal repository
+  that gated nobody but the owner: no one else has write access, so an outside
+  contributor's fork PR can never be self-merged whatever the rule says, while
+  GitHub forbids approving your own pull request. The result was that every
+  single merge needed the admin override, which makes the protection advisory
+  in practice and trains you to reach for `--admin` reflexively — worse than
+  not having the rule.
+
+  What still holds without it: no direct pushes to `main`, no merge with red
+  CI, no force-push, no deletion.
+
+  **Restore `required_approving_review_count: 1` and
+  `require_code_owner_review: true` the moment a second maintainer with write
+  access exists**, because at that point the rule starts protecting against
+  something real. `.github/CODEOWNERS` already assigns every path to
+  `@riazhassan-za`, so the requirement will bind to the maintainer rather than
+  to any contributor.
 
 - [ ] **Decide what happens to the admin bypass before the second maintainer
-  joins.** GitHub does not let anyone approve their own pull request, so a
-  sole maintainer with a mandatory approval would be unable to merge their own
-  work at all. `branch-protection.json` therefore grants always-bypass to the
-  admin repository role (`actor_id: 5`). That is the "or admin" escape hatch,
-  but it also means the rules are advisory for the owner. Remove the
-  `bypass_actors` entry once a second reviewer exists.
+  joins.** The ruleset grants always-bypass to the admin repository role
+  (`actor_id: 5`), which is the "or admin" escape hatch — and also means the
+  rules stay advisory for the owner. Remove the `bypass_actors` entry at the
+  same time the approval requirement goes back on.
 
 - [x] `SECURITY.md` documents the disclosure process, the supported versions,
   and the known weaknesses from section 1, so a reporter can tell at a glance

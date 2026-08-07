@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-07
+
 ### Changed
 
 - **Documented as what it is: a VNC viewer for 64-bit Windows**, with support
@@ -25,6 +27,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Also corrected: the package metadata carried
   `Environment :: X11 Applications :: Qt`, an X11 classifier on a Windows-only
   application, and a generic Windows classifier where 10 and 11 are meant.
+
+- **The `main` ruleset no longer requires an approving review.** On a personal
+  repository that requirement gated nobody but the maintainer — no one else has
+  write access, so a fork PR can never be self-merged whatever the rule says,
+  while GitHub forbids approving your own pull request. Every merge therefore
+  needed the admin override, which makes the protection advisory in practice.
+  Pull requests, passing CI, no force-push and no deletion all still hold.
+  TODO §9 records the trigger for putting the requirement back.
 
 ## [0.9.0] - 2026-08-07
 
@@ -352,7 +362,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.0...v0.8.1
