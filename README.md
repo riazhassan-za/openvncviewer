@@ -106,6 +106,10 @@ Mouse positions are mapped back through the same scale, so clicks land where
 you point at any window size. Clicks in the letterbox area clamp to the nearest
 remote pixel.
 
+This holds at Windows display scaling above 100%: the scaled image is cached in
+**device** pixels, so a 150% or 200% display gets the full resolution it can
+show rather than a stretched copy, and clicks stay exact.
+
 ## Recent servers
 
 The **Host** box is a dropdown of servers you have connected to before, most

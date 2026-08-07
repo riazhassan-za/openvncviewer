@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The remote desktop was drawn blurry at Windows display scaling above
+  100%.** The cached pixmap was allocated in logical pixels, so at 150% it held
+  64% of the pixels the screen could show and at 200% just 48% — Qt stretched
+  the rest. It is now allocated in device pixels with `devicePixelRatio` set,
+  restoring 97% coverage at every scale, which is what it had at 100% all
+  along.
+
+  Clicks were never affected: `target_rect()` and the mouse position are both
+  in logical pixels, so the scale factor cancels. Earlier notes in this project
+  suspected the pointer mapping; that was wrong, and measuring it said so.
+
+  The cost is a pixmap with `ratio**2` more pixels, so a full rescale at 200%
+  does around four times the work. Damage-limited repainting keeps the common
+  case cheap.
+
 ## [0.8.0] - 2026-08-07
 
 ### Added
