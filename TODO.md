@@ -79,11 +79,28 @@ today.
 
 ## 2. Platform and packaging
 
-- [ ] **The prebuilt `OpenVNCViewer.exe` runs only on 64-bit Windows 10 (1809+)
-  and Windows 11.** That is the floor for the embedded CPython. It will not run
-  on Windows 7/8/8.1 or 32-bit Windows. Nothing in the source depends on a
-  recent Python, so those targets only need a rebuild with an older/32-bit
-  interpreter — but nobody has done or tested that.
+- [x] Releases ship **x64 and ARM64** builds. ARM64 needed no source changes:
+  PySide6 publishes a `win_arm64` wheel. CI checks the PE header of each
+  artifact rather than trusting the runner label, since a build that silently
+  produced the wrong architecture would look fine until someone downloaded it.
+
+- [ ] **32-bit Windows and Windows 7/8 cannot be supported with the current
+  toolkit**, and this is a Qt constraint rather than a Python one:
+
+  - **PySide6 has never shipped a 32-bit (`win32`) wheel** — not in any
+    release. Its Windows wheels are `win_amd64` and `win_arm64` only.
+  - **Qt 6 requires Windows 10**, so even a 64-bit build cannot run on 7 or 8.
+
+  The note this replaces claimed those targets "only need a rebuild with an
+  older/32-bit interpreter". That was wrong, and would have sent someone down a
+  dead end: no interpreter choice can conjure a wheel that does not exist.
+
+  Supporting them means a **parallel port to PySide2 / Qt 5**, which does ship
+  `win32` wheels and runs on Windows 7. That implies Python <= 3.10 (3.8 for
+  Windows 7), a second UI code path for the Qt 5 API differences, and a doubled
+  CI matrix — against dependencies that have been end-of-life since 2020, for
+  operating systems that lost security updates in 2023. Recorded as a decision
+  taken, not an oversight.
 - [ ] **The executable is unsigned.** SmartScreen warns on first run on any
   machine that has not seen it before, and some corporate policies will block
   it outright. Needs an Authenticode certificate to fix properly.

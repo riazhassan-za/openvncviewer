@@ -68,10 +68,21 @@ connected to.
 
 ### Prebuilt executable
 
-Download `OpenVNCViewer.exe` from the
-[latest release](https://github.com/riazhassan-za/openvncviewer/releases).
-It is a single file with Python, PySide6 and cryptography bundled — nothing to
-install. It is unsigned, so SmartScreen will warn on first run.
+Download from the
+[latest release](https://github.com/riazhassan-za/openvncviewer/releases):
+
+| File | For |
+| --- | --- |
+| `OpenVNCViewer-x64.exe` | 64-bit Windows 10 (1809+) or Windows 11 |
+| `OpenVNCViewer-arm64.exe` | Windows on ARM (Surface, Snapdragon) |
+
+Each is a single file with Python, PySide6 and cryptography bundled — nothing
+to install. They are unsigned, so SmartScreen will warn on first run.
+`SHA256SUMS.txt` on the release lets you verify what you downloaded.
+
+**32-bit Windows and Windows 7/8 are not supported.** That is a Qt limitation,
+not an oversight: PySide6 has never published a 32-bit wheel, and Qt 6 requires
+Windows 10. See [TODO.md](TODO.md) §2.
 
 ### From source
 
@@ -315,9 +326,13 @@ Produces `dist\OpenVNCViewer.exe` (~49 MB). The spec excludes the PySide6
 modules the viewer never touches (WebEngine, Quick, 3D, Multimedia and
 friends), which is most of the download size.
 
-The build will not run on Windows 7/8/8.1 or 32-bit Windows — that is the floor
-for the embedded CPython, not a limitation of the code. Rebuilding with an
-older or 32-bit interpreter should work but has not been tested.
+You get a binary for whatever architecture you build on. CI builds x64 and
+ARM64 and names each per architecture.
+
+A 32-bit or Windows 7/8 build is **not** a matter of choosing a different
+interpreter: PySide6 has never published a 32-bit wheel, and Qt 6 requires
+Windows 10. See [TODO.md](TODO.md) §2 for what supporting them would actually
+take.
 
 ## Known limitations
 
