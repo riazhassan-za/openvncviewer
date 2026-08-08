@@ -14,6 +14,14 @@ These are the items that matter most for a publicly consumed tool. None of them
 are hypothetical — they follow directly from how the protocol is implemented
 today.
 
+An independent adversarial review of commit `4dbba56` is published in
+[docs/](docs/). Both High-severity findings and three others are fixed in
+0.10.0; the rest are open and indexed with their severities in
+[docs/README.md](docs/README.md), which is the authoritative status page for
+that audit. The highest open items are now **AUTH-01/NET-4** (security
+negotiation can fall back from ARD to legacy VNC after a username was given)
+and **AUTH-02** (ARD accepts small-subgroup peer keys).
+
 - [x] **Diffie-Hellman parameters are validated** before the password is
   encrypted under a key derived from them. `rfb.py::_validate_dh_group` rejects
   a prime under 1024 bits, a composite modulus, a generator outside
@@ -412,30 +420,50 @@ claiming any change here is an improvement.
   date with `main`, requires review threads to be resolved, dismisses stale
   approvals on new pushes, and blocks deletion and force-pushes of `main`.
 
-- [x] **The mandatory approving review was removed, deliberately.** It was
-  originally one approving review from a code owner. On a personal repository
-  that gated nobody but the owner: no one else has write access, so an outside
-  contributor's fork PR can never be self-merged whatever the rule says, while
-  GitHub forbids approving your own pull request. The result was that every
-  single merge needed the admin override, which makes the protection advisory
-  in practice and trains you to reach for `--admin` reflexively — worse than
-  not having the rule.
+- [x] **Release tags are protected.** `.github/tag-protection.json` restricts
+  creating, moving and deleting `refs/tags/v*` to the admin role, and the
+  release job independently refuses to publish a tag whose commit is not
+  contained in `main`. Before this, a tag was sufficient to publish an official
+  binary from any commit through a job holding `contents: write` — audit
+  finding SC-02/CFG-02. The two controls are deliberately independent: the
+  workflow check still holds if the ruleset is changed or removed.
 
-  What still holds without it: no direct pushes to `main`, no merge with red
-  CI, no force-push, no deletion.
+  ```
+  gh api --method PUT repos/riazhassan-za/openvncviewer/rulesets/20584903 \
+         --input .github/tag-protection.json
+  ```
 
-  **Restore `required_approving_review_count: 1` and
-  `require_code_owner_review: true` the moment a second maintainer with write
-  access exists**, because at that point the rule starts protecting against
-  something real. `.github/CODEOWNERS` already assigns every path to
-  `@riazhassan-za`, so the requirement will bind to the maintainer rather than
-  to any contributor.
+  Not done: **signed tags**. The ruleset can require them, but every existing
+  tag is unsigned and there is no signing key set up, so turning it on would
+  block releases rather than secure them. Revisit alongside Authenticode
+  signing for the executable, which is the same missing piece.
 
-- [ ] **Decide what happens to the admin bypass before the second maintainer
-  joins.** The ruleset grants always-bypass to the admin repository role
-  (`actor_id: 5`), which is the "or admin" escape hatch — and also means the
-  rules stay advisory for the owner. Remove the `bypass_actors` entry at the
-  same time the approval requirement goes back on.
+- [x] **One approving review from a code owner is required**, and
+  `.github/CODEOWNERS` assigns every path to `@riazhassan-za`, so it binds to
+  the maintainer rather than to any contributor with write access.
+
+  This was briefly set to zero. The reasoning was that on a personal repository
+  nobody else has write access, so the rule gated only the owner — who cannot
+  approve their own pull request — and every merge therefore needed the admin
+  override, which makes the protection advisory in practice.
+
+  **That reasoning was wrong: a second collaborator with write access exists.**
+  It was asserted without checking the collaborator list. With two write-capable
+  accounts the rule protects against something real — either can otherwise merge
+  their own work to `main` unreviewed — so it is back on. Check
+  `gh api repos/riazhassan-za/openvncviewer/collaborators` before reasoning
+  about who can merge what.
+
+- [ ] **`require_last_push_approval` is off.** Turning it on stops the account
+  that pushed last from also being the approver, which is the point of the rule
+  once two maintainers can review each other. Left as it was rather than
+  tightened silently; consider it alongside the bypass below.
+
+- [ ] **Decide what happens to the admin bypass.** The ruleset grants
+  always-bypass to the admin repository role (`actor_id: 5`), which is the "or
+  admin" escape hatch — and also means the rules stay advisory for the owner.
+  Now that a second reviewer exists, the approval requirement can be satisfied
+  without it, so the `bypass_actors` entry can go.
 
 - [x] `SECURITY.md` documents the disclosure process, the supported versions,
   and the known weaknesses from section 1, so a reporter can tell at a glance

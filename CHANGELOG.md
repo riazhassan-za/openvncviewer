@@ -6,6 +6,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-08
+
+### Security
+
+An independent adversarial review found defects a hostile or impersonated
+server could reach, plus a gap in the release path. Both High-severity findings
+and three others are fixed here, and the full audit is published in [docs/](docs/)
+alongside the findings still open — see [docs/README.md](docs/README.md) for
+what is and is not addressed. **If you run 0.9.1 or earlier, update.**
+
+- **Peer-controlled lengths and dimensions were read before any global bound**
+  (High). A framebuffer update declaring a 65535x65535 rectangle caused a
+  17,179,344,900-byte read request to be issued before the geometry was
+  checked, and an announced desktop of the same size was a 17 GB allocation
+  asked for by four bytes on the wire. The desktop name and the authentication
+  failure reason — the latter readable by anything answering on port 5900,
+  before authentication — were `u32` lengths with no ceiling at all.
+
+  Rectangle geometry is now validated *before* the body is read rather than
+  after, and dimensions, total pixels, compressed bodies, the desktop name and
+  the failure reason each have a limit. The same hostile input now produces
+  reads of 3 and 12 bytes, then an error. Real hardware is unaffected: the caps
+  are far above a 3420x2214 Retina desktop or two 4K monitors side by side.
+
+- **Any `v*` tag published an official release** (High), from any commit,
+  through a job holding `contents: write` — so anyone able to push a tag could
+  have published a binary under the project's name from code that never went
+  through a reviewed pull request. Two controls now, deliberately independent:
+  a repository ruleset restricts creating, moving and deleting `v*` tags, and
+  the release job refuses to publish a tag whose commit is not contained in
+  `main`. The second does not depend on the first staying configured.
+
+- **A truncated ZRLE tile could shrink the framebuffer under a live `QImage`
+  pointer.** The framebuffer is a `bytearray` that Qt wraps zero-copy, so its
+  length is an invariant: assigning a short row to a full-width slice shrinks
+  it exactly as an overlong one grows it. A tile that declared a colour and
+  omitted it produced fewer pixels than the tile claimed — `zlib.compress(b"\x01")`
+  against a 64x64 rectangle took the buffer from 16,384 bytes to 10,240. Every
+  packed-palette subencoding did the same.
+
+  `_blit` had guarded the *geometry* since 0.6.0. It now also requires the pixel
+  payload to be exactly `w * h * 4` bytes, which closes the class rather than
+  the instances found, and the compressed-pixel and packed-row reads are bounds
+  checked so truncation fails where it happens.
+
+- **CopyRect validated its source rectangle but not its destination**, reaching
+  the same sink by a different route: a 1x1 copy to (65535, 0) grew a 4x4
+  framebuffer from 64 bytes to 68. Both ends now go through one shared check.
+
+- **Unticking "Save password" did not revoke the stored token unless the next
+  connection succeeded.** The write was deferred to session start so that only
+  servers actually connected to are remembered, and a failed connection threw
+  the whole pending update away — including the revocation. Revoking a
+  credential is not a history update: it now happens immediately, in place, so
+  the entry keeps its position and its other details.
+
+### Added
+
+- `ServerHistory.forget_password()`, which clears a saved token without
+  touching the entry's order or metadata.
+
+### Changed
+
+- **The `main` ruleset requires an approving code-owner review again**,
+  reversing the change in 0.9.1. That change rested on the claim that nobody
+  but the owner has write access to a personal repository, so the rule gated
+  only the person who cannot approve their own pull request. The claim was
+  never checked and is false: a second collaborator has write access. With two
+  write-capable accounts either could otherwise merge their own work to `main`
+  unreviewed, so the requirement is back on. This is audit finding
+  SC-05/CFG-04.
+
 ## [0.9.1] - 2026-08-07
 
 ### Changed
@@ -362,7 +434,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.1...v0.8.2

@@ -46,6 +46,23 @@ BYTES_PER_PIXEL = 4
 MAX_CLIPBOARD_BYTES = 1024 * 1024
 CLIPBOARD_HARD_LIMIT = 16 * 1024 * 1024
 
+# Ceilings on anything the peer sizes. Without them a `u16` pair or a `u32`
+# length is an allocation request: 65535x65535 is a 17GB framebuffer, and a
+# rectangle that large is read off the wire before its geometry is checked.
+# The dimension cap is far above any real display - 16384 wide is four 4K
+# monitors side by side - and the pixel cap bounds the product, which is what
+# actually allocates.
+MAX_DIMENSION = 16384
+MAX_PIXELS = 8192 * 8192
+# The desktop name is a label for a title bar, and an authentication failure
+# reason is a sentence. Neither needs a megabyte.
+MAX_DESKTOP_NAME_BYTES = 64 * 1024
+MAX_FAILURE_REASON_BYTES = 8 * 1024
+# A compressed rectangle body. ZRLE of a full-screen 8192x8192 update is far
+# below this even uncompressed; the cap exists so a declared length cannot be
+# used to stall or exhaust before decompression limits apply.
+MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
+
 # Diffie-Hellman limits for ARD authentication. macOS Screen Sharing offers a
 # 4096-bit group with generator 5; the floor is well below that because older
 # releases may not, and the ceiling only exists to stop a server forcing
@@ -234,6 +251,10 @@ class RFBClient:
         width, height = struct.unpack("!HH", self._read(4))
         self._read(16)  # server pixel format, replaced below
         name_len = struct.unpack("!I", self._read(4))[0]
+        if name_len > MAX_DESKTOP_NAME_BYTES:
+            raise RFBError(
+                f"server announced a {name_len}-byte desktop name; refusing "
+                f"to read past {MAX_DESKTOP_NAME_BYTES}")
         self.desktop_name = self._read(name_len).decode("utf-8", "replace")
 
         self._set_pixel_format()
@@ -312,6 +333,10 @@ class RFBClient:
 
     def _read_failure_reason(self):
         length = struct.unpack("!I", self._read(4))[0]
+        # Read before authentication succeeds, so this is reachable by anything
+        # that can answer on port 5900. It is a sentence, not a payload.
+        if length > MAX_FAILURE_REASON_BYTES:
+            return "authentication failed (server sent an oversized reason)"
         return self._read(length).decode("utf-8", "replace")
 
     def _auth_ard(self):
@@ -362,6 +387,13 @@ class RFBClient:
                    + b"".join(struct.pack("!i", e) for e in encodings))
 
     def _resize(self, width, height):
+        # The server picks these, and the product is an allocation. 65535x65535
+        # is a 17GB bytearray requested by four bytes on the wire.
+        if not 0 < width <= MAX_DIMENSION or not 0 < height <= MAX_DIMENSION \
+                or width * height > MAX_PIXELS:
+            raise RFBError(
+                f"server announced a {width}x{height} desktop, beyond the "
+                f"{MAX_DIMENSION}x{MAX_DIMENSION} / {MAX_PIXELS}-pixel limit")
         self.width = width
         self.height = height
         self.framebuffer = bytearray(width * height * BYTES_PER_PIXEL)
@@ -400,12 +432,22 @@ class RFBClient:
         damage = None
         for _ in range(count):
             x, y, w, h, encoding = struct.unpack("!HHHHi", self._read(12))
+            if encoding != ENC_DESKTOP_SIZE:
+                # Before reading a byte of body. _blit checks this too, but it
+                # only runs once the body is already in hand - and a 65535x65535
+                # Raw rectangle is a 17GB read request that would be issued,
+                # and stalled or satisfied, long before the check was reached.
+                self._check_rect(x, y, w, h, "rectangle")
             if encoding == ENC_RAW:
                 self._blit(x, y, w, h, self._read(w * h * BYTES_PER_PIXEL))
             elif encoding == ENC_COPYRECT:
                 self._copy_rect(x, y, w, h)
             elif encoding == ENC_ZRLE:
                 length = struct.unpack("!I", self._read(4))[0]
+                if length > MAX_COMPRESSED_BYTES:
+                    raise RFBError(
+                        f"server declared a {length}-byte compressed rectangle; "
+                        f"refusing to read past {MAX_COMPRESSED_BYTES}")
                 self._decode_zrle(x, y, w, h, self._read(length))
             elif encoding == ENC_DESKTOP_SIZE:
                 self._resize(w, h)
@@ -424,6 +466,19 @@ class RFBClient:
             self._on_damage(*damage)
         self.request_update(incremental=True)
 
+    def _check_rect(self, x, y, w, h, what):
+        """Reject a rectangle that does not lie wholly inside the framebuffer.
+
+        Every write into the framebuffer goes through here. Source and
+        destination both need it: a destination outside the buffer grows it,
+        which is the dangerous direction while QImage holds a pointer in.
+        """
+        if x < 0 or y < 0 or w < 0 or h < 0 or \
+                x + w > self.width or y + h > self.height:
+            raise RFBError(
+                f"server sent a {w}x{h} {what} at ({x}, {y}), outside the "
+                f"{self.width}x{self.height} framebuffer")
+
     def _blit(self, x, y, w, h, pixels):
         """Copy a w*h block of BGRX pixels into the framebuffer at (x, y).
 
@@ -437,10 +492,18 @@ class RFBClient:
         # failing, and QImage holds a raw pointer into this buffer - so an
         # out-of-bounds rectangle would reallocate underneath the view. One
         # O(1) check per blit is far cheaper than that going wrong.
-        if x < 0 or y < 0 or x + w > self.width or y + h > self.height:
+        self._check_rect(x, y, w, h, "rectangle")
+
+        # Geometry alone is not enough. Assigning a *short* row to a full-width
+        # slice shrinks the bytearray just as surely as an overlong one grows
+        # it, and a truncated ZRLE tile produces exactly that: a decoder that
+        # ran out of input returns fewer pixels than the tile claims. Checking
+        # the payload here catches every such path at the one sink they share.
+        expected = w * h * BYTES_PER_PIXEL
+        if len(pixels) != expected:
             raise RFBError(
-                f"server sent a {w}x{h} rectangle at ({x}, {y}), outside the "
-                f"{self.width}x{self.height} framebuffer")
+                f"a {w}x{h} rectangle needs {expected} bytes of pixel data, "
+                f"got {len(pixels)}")
 
         stride = self.width * BYTES_PER_PIXEL
         fb = self.framebuffer
@@ -451,10 +514,12 @@ class RFBClient:
 
     def _copy_rect(self, x, y, w, h):
         src_x, src_y = struct.unpack("!HH", self._read(4))
-        if src_x + w > self.width or src_y + h > self.height:
-            raise RFBError(
-                f"CopyRect source ({src_x}, {src_y}) {w}x{h} lies outside the "
-                f"{self.width}x{self.height} framebuffer")
+        # Both ends, through the same check. Validating only the source left
+        # the destination free to run past the end of the framebuffer, where
+        # slice assignment grows it under the view - the very thing the
+        # destination check in _blit exists to prevent.
+        self._check_rect(src_x, src_y, w, h, "CopyRect source")
+        self._check_rect(x, y, w, h, "CopyRect destination")
         stride = self.width * BYTES_PER_PIXEL
         row_len = w * BYTES_PER_PIXEL
         fb = self.framebuffer
@@ -518,6 +583,11 @@ class RFBClient:
             pos += sub * 3
             bits = 1 if sub == 2 else (2 if sub <= 4 else 4)
             row_bytes = (tw * bits + 7) // 8
+            # Short rows slice away to nothing rather than failing, producing a
+            # tile smaller than the one claimed. Demand the whole block first.
+            if pos + row_bytes * th > len(raw):
+                raise RFBError("truncated ZRLE tile: packed palette rows end "
+                               "early")
             mask = (1 << bits) - 1
             shifts = tuple(range(8 - bits, -1, -bits))
             # The spare bits at the end of a row are padding and may hold any
@@ -692,7 +762,14 @@ def _union(current, x, y, w, h):
 
 
 def _cpixel(raw, pos):
-    """A ZRLE compressed pixel (3 bytes BGR) widened to 4-byte BGRX."""
+    """A ZRLE compressed pixel (3 bytes BGR) widened to 4-byte BGRX.
+
+    Checked rather than sliced: slicing past the end of a bytes object
+    truncates silently, so a missing colour became a one-byte "pixel" that
+    shrank the framebuffer several layers further down.
+    """
+    if pos < 0 or pos + 3 > len(raw):
+        raise RFBError("truncated ZRLE tile: pixel data ends early")
     return raw[pos:pos + 3] + b"\xff"
 
 
