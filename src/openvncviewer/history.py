@@ -139,6 +139,24 @@ class ServerHistory:
         del self._entries[MAX_ENTRIES:]
         self.save()
 
+    def forget_password(self, host):
+        """Drop a saved password, leaving the entry and its order alone.
+
+        Separate from `remember` because revoking a credential is not a
+        history update: it must not wait for a connection to succeed, and must
+        not promote the server up the list on the way. Returns whether there
+        was a token to forget.
+        """
+        host = (host or "").strip()
+        for entry in self._entries:
+            if entry["host"] == host:
+                if not entry["password"]:
+                    return False
+                entry["password"] = ""
+                self.save()
+                return True
+        return False
+
     def remove(self, host):
         """Forget one server. Returns whether there was anything to forget."""
         host = (host or "").strip()

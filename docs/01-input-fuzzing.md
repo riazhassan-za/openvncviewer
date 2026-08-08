@@ -1,8 +1,8 @@
 # Fallback adversarial-input / parser review
 
 **Target:** `4dbba5643733d31b51f76aef9a6fe67e53af09b8`  
-**Worktree:** `/home/riaanroos/SoftwareDevelopment/riaz_stuff/openvncviewer/security-evaluation-main`  
-**Nature of this report:** This is fallback adversarial-input coverage produced independently because the designated Input Fuzzer agent did not produce its artifact. It reuses the safe conclusions of `06-network-protocol.md`, but adds bounded parser probes and a newly confirmed ZRLE truncation defect. No tracked source was changed and no non-loopback network target was contacted.
+**Worktree:** the repository at the commit above  
+**Nature of this report:** This report covers adversarial input handling. It reuses the safe conclusions of `06-network-protocol.md`, but adds bounded parser probes and a newly confirmed ZRLE truncation defect. No tracked source was changed and no non-loopback network target was contacted.
 
 The checked-out `HEAD` was the requested commit. `src/openvncviewer/rfb.py` had SHA-256 `7ebe6e680f1994059b5cf936001f30d517de90e49e891722583fd0c28fcab274`, identical to `git show <commit>:src/openvncviewer/rfb.py`.
 

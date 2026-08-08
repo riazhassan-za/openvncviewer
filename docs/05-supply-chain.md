@@ -2,7 +2,7 @@
 
 **Target:** `4dbba5643733d31b51f76aef9a6fe67e53af09b8`  
 **Tree:** `85fcfc05f17605f5b32a4c1dc92ad80c155498ce`  
-**Repository:** `/home/riaanroos/SoftwareDevelopment/riaz_stuff/openvncviewer/security-evaluation-main`  
+**Repository:** the repository at the commit above  
 **Method:** static/offline review of the exact checked-out commit and local Git objects. No tracked source was changed, and no network-derived assertions are made.
 
 ## Executive summary

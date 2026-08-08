@@ -109,6 +109,32 @@ class ServerHistoryTest(unittest.TestCase):
         self.assertEqual(history.find("mac.local")["password"], "")
         self.assertNotIn("AQAAtoken", self.path.read_text(encoding="utf-8"))
 
+    def test_forgetting_a_password_keeps_the_entry_and_its_place(self):
+        """Revocation is not a history update: it must not reorder the list."""
+        history = ServerHistory(self.path)
+        history.remember("first", 5900, "amy", "First", "token-1")
+        history.remember("second", 5900, "bo", "Second", "token-2")
+        self.assertEqual(history.hosts(), ["second", "first"])
+
+        self.assertTrue(history.forget_password("first"))
+
+        self.assertEqual(history.hosts(), ["second", "first"],
+                         "revoking a password promoted the server")
+        entry = history.find("first")
+        self.assertEqual(entry["password"], "")
+        self.assertEqual(entry["username"], "amy", "metadata was discarded")
+        self.assertEqual(entry["name"], "First")
+        on_disk = json.loads(self.path.read_text())["servers"]
+        self.assertEqual([s["host"] for s in on_disk], ["second", "first"])
+        self.assertEqual(on_disk[1]["password"], "", "the token is still on disk")
+
+    def test_forgetting_a_password_reports_whether_there_was_one(self):
+        history = ServerHistory(self.path)
+        history.remember("host", 5900, password="token")
+        self.assertTrue(history.forget_password("host"))
+        self.assertFalse(history.forget_password("host"), "nothing left to do")
+        self.assertFalse(history.forget_password("never-seen"))
+
     def test_removing_a_server_takes_its_password_off_disk(self):
         history = ServerHistory(self.path)
         history.remember("mac.local", 5900, "u", "N", password="AQAAtoken==")

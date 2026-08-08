@@ -1,6 +1,6 @@
 # Configuration and infrastructure security audit
 
-**Repository:** `/home/riaanroos/SoftwareDevelopment/riaz_stuff/openvncviewer/security-evaluation-main`  
+**Repository:** the repository at the commit above  
 **Commit:** `4dbba5643733d31b51f76aef9a6fe67e53af09b8`  
 **Method:** static, offline review of the checked-out tree and all 44 commits reachable from local refs. No tracked files were changed and no network services or live GitHub settings were queried.
 

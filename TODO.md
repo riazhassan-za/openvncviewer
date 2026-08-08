@@ -14,6 +14,14 @@ These are the items that matter most for a publicly consumed tool. None of them
 are hypothetical — they follow directly from how the protocol is implemented
 today.
 
+An independent adversarial review of commit `4dbba56` is published in
+[docs/](docs/). Both High-severity findings and three others are fixed in
+0.10.0; the rest are open and indexed with their severities in
+[docs/README.md](docs/README.md), which is the authoritative status page for
+that audit. The highest open items are now **AUTH-01/NET-4** (security
+negotiation can fall back from ARD to legacy VNC after a username was given)
+and **AUTH-02** (ARD accepts small-subgroup peer keys).
+
 - [x] **Diffie-Hellman parameters are validated** before the password is
   encrypted under a key derived from them. `rfb.py::_validate_dh_group` rejects
   a prime under 1024 bits, a composite modulus, a generator outside
@@ -411,6 +419,24 @@ claiming any change here is an improvement.
   It forces a pull request, demands the five CI test jobs pass and be up to
   date with `main`, requires review threads to be resolved, dismisses stale
   approvals on new pushes, and blocks deletion and force-pushes of `main`.
+
+- [x] **Release tags are protected.** `.github/tag-protection.json` restricts
+  creating, moving and deleting `refs/tags/v*` to the admin role, and the
+  release job independently refuses to publish a tag whose commit is not
+  contained in `main`. Before this, a tag was sufficient to publish an official
+  binary from any commit through a job holding `contents: write` — audit
+  finding SC-02/CFG-02. The two controls are deliberately independent: the
+  workflow check still holds if the ruleset is changed or removed.
+
+  ```
+  gh api --method PUT repos/riazhassan-za/openvncviewer/rulesets/20584903 \
+         --input .github/tag-protection.json
+  ```
+
+  Not done: **signed tags**. The ruleset can require them, but every existing
+  tag is unsigned and there is no signing key set up, so turning it on would
+  block releases rather than secure them. Revisit alongside Authenticode
+  signing for the executable, which is the same missing piece.
 
 - [x] **The mandatory approving review was removed, deliberately.** It was
   originally one approving review from a code owner. On a personal repository

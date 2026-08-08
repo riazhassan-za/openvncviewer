@@ -718,6 +718,13 @@ class MainWindow(QMainWindow):
         # Held until the session actually comes up: the list is of servers
         # connected to, not of hosts typed.
         self._pending_history = (host, port, username, server_name, token or "")
+        # Revoking a saved password is not a history update and must not wait
+        # for the connection to succeed. Untick the box, fail to connect, and
+        # deferring this would leave the old token on disk after the user asked
+        # for it to be gone. Clears the token in place, so an unknown host still
+        # records nothing and a known one keeps its place in the list.
+        if not save_password:
+            self.history.forget_password(host)
         self.server_name = server_name
         self.status.setText(f"Connecting to {host}:{port}...")
         self.client = RFBClient(

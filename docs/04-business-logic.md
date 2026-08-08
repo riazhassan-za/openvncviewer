@@ -1,6 +1,6 @@
 # Business-logic, state-machine, and concurrency audit
 
-**Target:** `/home/riaanroos/SoftwareDevelopment/riaz_stuff/openvncviewer/security-evaluation-main`  
+**Target:** the repository at the commit above  
 **Commit:** `4dbba5643733d31b51f76aef9a6fe67e53af09b8`  
 **Audit focus:** clipboard synchronization and overwrite/disclosure, connect/disconnect/reconnect sequencing, input forwarding, recent-server/password save/delete flows, UI/network thread handoff, DesktopSize/update behavior, and zero-copy framebuffer/QImage lifetime.
 

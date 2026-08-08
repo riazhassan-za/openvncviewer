@@ -119,7 +119,27 @@ jobs:
       contents: write
     steps:
       # Needed for CHANGELOG.md; checks out the tag that triggered this run.
+      # Full history so the tag can be proved to descend from main below.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse to publish a tag that is not on main
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          # A tag is enough to trigger this job, and the job holds
+          # contents: write. Without this, anyone able to push a v* tag could
+          # publish an official release built from a commit that never went
+          # through a reviewed pull request. The tag ruleset in
+          # .github/tag-protection.json is the primary control; this is the
+          # check that does not depend on that ruleset staying configured.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not \
+          contained in main. Refusing to publish a release from it."
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is contained in main."
 
       - uses: actions/download-artifact@v4
         with:
