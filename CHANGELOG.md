@@ -67,6 +67,17 @@ what is and is not addressed. **If you run 0.9.1 or earlier, update.**
 - `ServerHistory.forget_password()`, which clears a saved token without
   touching the entry's order or metadata.
 
+### Changed
+
+- **The `main` ruleset requires an approving code-owner review again**,
+  reversing the change in 0.9.1. That change rested on the claim that nobody
+  but the owner has write access to a personal repository, so the rule gated
+  only the person who cannot approve their own pull request. The claim was
+  never checked and is false: a second collaborator has write access. With two
+  write-capable accounts either could otherwise merge their own work to `main`
+  unreviewed, so the requirement is back on. This is audit finding
+  SC-05/CFG-04.
+
 ## [0.9.1] - 2026-08-07
 
 ### Changed
