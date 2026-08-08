@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The `main` ruleset requires an approving code-owner review again**,
+  reversing the change in 0.9.1. That change rested on the claim that nobody
+  but the owner has write access to a personal repository, so the rule gated
+  only the person who cannot approve their own pull request. The claim was
+  never checked and is false: a second collaborator has write access. With two
+  write-capable accounts either could otherwise merge their own work to `main`
+  unreviewed, so the requirement is back on.
+
 ## [0.9.1] - 2026-08-07
 
 ### Changed

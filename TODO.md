@@ -412,30 +412,32 @@ claiming any change here is an improvement.
   date with `main`, requires review threads to be resolved, dismisses stale
   approvals on new pushes, and blocks deletion and force-pushes of `main`.
 
-- [x] **The mandatory approving review was removed, deliberately.** It was
-  originally one approving review from a code owner. On a personal repository
-  that gated nobody but the owner: no one else has write access, so an outside
-  contributor's fork PR can never be self-merged whatever the rule says, while
-  GitHub forbids approving your own pull request. The result was that every
-  single merge needed the admin override, which makes the protection advisory
-  in practice and trains you to reach for `--admin` reflexively — worse than
-  not having the rule.
+- [x] **One approving review from a code owner is required**, and
+  `.github/CODEOWNERS` assigns every path to `@riazhassan-za`, so it binds to
+  the maintainer rather than to any contributor with write access.
 
-  What still holds without it: no direct pushes to `main`, no merge with red
-  CI, no force-push, no deletion.
+  This was briefly set to zero. The reasoning was that on a personal repository
+  nobody else has write access, so the rule gated only the owner — who cannot
+  approve their own pull request — and every merge therefore needed the admin
+  override, which makes the protection advisory in practice.
 
-  **Restore `required_approving_review_count: 1` and
-  `require_code_owner_review: true` the moment a second maintainer with write
-  access exists**, because at that point the rule starts protecting against
-  something real. `.github/CODEOWNERS` already assigns every path to
-  `@riazhassan-za`, so the requirement will bind to the maintainer rather than
-  to any contributor.
+  **That reasoning was wrong: a second collaborator with write access exists.**
+  It was asserted without checking the collaborator list. With two write-capable
+  accounts the rule protects against something real — either can otherwise merge
+  their own work to `main` unreviewed — so it is back on. Check
+  `gh api repos/riazhassan-za/openvncviewer/collaborators` before reasoning
+  about who can merge what.
 
-- [ ] **Decide what happens to the admin bypass before the second maintainer
-  joins.** The ruleset grants always-bypass to the admin repository role
-  (`actor_id: 5`), which is the "or admin" escape hatch — and also means the
-  rules stay advisory for the owner. Remove the `bypass_actors` entry at the
-  same time the approval requirement goes back on.
+- [ ] **`require_last_push_approval` is off.** Turning it on stops the account
+  that pushed last from also being the approver, which is the point of the rule
+  once two maintainers can review each other. Left as it was rather than
+  tightened silently; consider it alongside the bypass below.
+
+- [ ] **Decide what happens to the admin bypass.** The ruleset grants
+  always-bypass to the admin repository role (`actor_id: 5`), which is the "or
+  admin" escape hatch — and also means the rules stay advisory for the owner.
+  Now that a second reviewer exists, the approval requirement can be satisfied
+  without it, so the `bypass_actors` entry can go.
 
 - [x] `SECURITY.md` documents the disclosure process, the supported versions,
   and the known weaknesses from section 1, so a reporter can tell at a glance
