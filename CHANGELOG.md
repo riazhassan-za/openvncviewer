@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alt+V opened the View menu instead of reaching the remote**, and Alt+F and
+  Alt+H did the same for File and Help. `RemoteView` claims `ShortcutOverride`,
+  but a menu mnemonic is matched application-wide rather than at the focused
+  widget, so the claim could not reach it. The menu titles now drop their
+  mnemonics while a session is live and get them back on disconnect, which
+  removes the shortcut rather than trying to out-rank it.
+
+  The existing modifier tests could not have caught this: they hand synthetic
+  events straight to `RemoteView.event()`, which says nothing about a key the
+  view never receives. The new ones go through Qt's own dispatch and assert on
+  the menu bar.
+
 ## [0.10.0] - 2026-08-08
 
 ### Security

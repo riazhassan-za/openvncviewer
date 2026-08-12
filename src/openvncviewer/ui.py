@@ -636,7 +636,24 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("&About", self.show_about)
 
+        # Alt+F, Alt+V and Alt+H belong to the remote while a session is up.
+        # The titles are restored on disconnect, so keyboard access to the
+        # menus is only given up for as long as something else needs the key.
+        self._menus = [(file_menu, "&File"), (view_menu, "&View"),
+                       (help_menu, "&Help")]
+
         self.last_connection = ("", 5900, "", WHEEL_SPEED_DEFAULT)
+
+    def _set_menu_mnemonics(self, enabled):
+        """Take the menu bar out of the Alt namespace while a session is up.
+
+        RemoteView claims ShortcutOverride, but a mnemonic is matched
+        application-wide rather than at the focused widget, so Alt+V could
+        still open the View menu. Removing the mnemonic removes the shortcut
+        entirely, which does not depend on where Qt routes the event.
+        """
+        for menu, title in self._menus:
+            menu.setTitle(title if enabled else title.replace("&", ""))
 
     def set_fullscreen(self, enabled):
         """Give the whole screen to the remote desktop, chrome included.
@@ -735,6 +752,8 @@ class MainWindow(QMainWindow):
             on_clipboard=self.signals.clipboard.emit,
         )
         self.view.attach(self.client)
+        self._set_menu_mnemonics(False)
+        self.view.setFocus()
         self.client.start()
 
     def disconnect(self):
@@ -742,6 +761,7 @@ class MainWindow(QMainWindow):
             self.client.stop()
             self.client = None
         self.view.detach()
+        self._set_menu_mnemonics(True)
         self.server_name = ""
         self.setWindowTitle("OpenVNCViewer")
         self.status.setText("Not connected")
@@ -790,6 +810,7 @@ class MainWindow(QMainWindow):
     def _on_disconnect(self, reason):
         self.view.detach()
         self.client = None
+        self._set_menu_mnemonics(True)
         self._pending_history = None  # never connected, so nothing to remember
         # A window still titled after the server it is no longer showing reads
         # as a live session.
