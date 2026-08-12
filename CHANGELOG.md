@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-08
+
+### Added
+
+- **Each server remembers its own session settings** — mouse wheel speed,
+  *Share clipboard*, and *Send Alt as Command*. Selecting a server from the
+  dropdown restores all three together, so a Retina Mac and a Windows VM no
+  longer have to share one set.
+
+  A host never connected to starts from what its connection type implies:
+  **raw, unamplified scrolling for a standard VNC server, and the existing
+  middle setting for a Mac.** A Retina desktop scaled into a window needs the
+  notch count amplified to feel like anything; ordinary hardware does not, and
+  the amplification just overshoots.
+
+  The type is read from the **Username** field, which is what already decides
+  the security type at connect — a macOS account means ARD, blank means a
+  standard VNC server. The *Send Alt as Command* tick deliberately does not
+  affect it: that tick defaults on, so using it would make every new
+  connection look like a Mac.
+
+  Once a server has a speed of its own, it wins. Typing or clearing a username
+  will not undo a speed you deliberately chose.
+
+  Servers saved before this release simply have no settings recorded and take
+  the type default; the entry is not discarded. This also means an unticked
+  *Share clipboard* now sticks, which was audit finding BL-4.
+
 ### Fixed
 
 - **Alt+V opened the View menu instead of reaching the remote**, and Alt+F and
@@ -448,7 +476,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.8.2...v0.9.0

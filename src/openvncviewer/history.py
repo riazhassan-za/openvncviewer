@@ -33,6 +33,40 @@ from pathlib import Path
 MAX_ENTRIES = 20
 FORMAT_VERSION = 1
 
+# Per-server session settings, with the value used when a file predates them or
+# a host has never been connected to. `wheel_speed` of None means "decide from
+# the connection type" - a Retina Mac wants amplification, a standard VNC server
+# wants the raw notch count - which is a UI judgement, not this module's.
+SESSION_DEFAULTS = {
+    "wheel_speed": None,
+    "share_clipboard": True,
+    "alt_is_command": True,
+}
+# Kept in step with ui.WHEEL_SPEED_MIN/MAX. Duplicated rather than imported
+# because this module is deliberately Qt-free and stdlib-only; the test suite
+# pins the two together.
+WHEEL_SPEED_RANGE = (1, 100)
+
+
+def _clean_session(entry):
+    """Session settings from a file anyone can edit, or their defaults.
+
+    A file written before these existed simply has none of them, which is the
+    same case as a value of the wrong type: fall back rather than refuse the
+    entry, because losing a saved server over a bad boolean would be worse
+    than ignoring the bad boolean.
+    """
+    speed = entry.get("wheel_speed")
+    low, high = WHEEL_SPEED_RANGE
+    return {
+        "wheel_speed": (speed if isinstance(speed, int)
+                        and low <= speed <= high else None),
+        "share_clipboard": entry.get("share_clipboard") if isinstance(
+            entry.get("share_clipboard"), bool) else True,
+        "alt_is_command": entry.get("alt_is_command") if isinstance(
+            entry.get("alt_is_command"), bool) else True,
+    }
+
 
 class ServerHistory:
     """Most-recently-connected first, capped, and safe to load from junk."""
@@ -81,6 +115,7 @@ class ServerHistory:
                 # An encrypted token, meaningless to this module.
                 "password": entry.get("password") if isinstance(
                     entry.get("password"), str) else "",
+                **_clean_session(entry),
             })
         return cleaned[:MAX_ENTRIES]
 
@@ -123,19 +158,28 @@ class ServerHistory:
 
     # ---------------------------------------------------------------- update
 
-    def remember(self, host, port, username="", name="", password=""):
+    def remember(self, host, port, username="", name="", password="",
+                 **session):
         """Move a server to the front of the list, or add it.
 
         `password` is an already-encrypted token or empty. Passing "" replaces
         any previously saved one, so unticking "Save password" forgets it.
+
+        `session` carries the per-server settings in SESSION_DEFAULTS - wheel
+        speed, clipboard sharing, Alt-as-Command. Anything not passed keeps its
+        default, so an older caller still works.
         """
         host = (host or "").strip()
         if not host:
             return
+        unknown = set(session) - set(SESSION_DEFAULTS)
+        if unknown:
+            raise TypeError(f"unknown session settings: {sorted(unknown)}")
         self._entries = [e for e in self._entries if e["host"] != host]
         self._entries.insert(0, {"host": host, "port": int(port),
                                  "username": username or "", "name": name or "",
-                                 "password": password or ""})
+                                 "password": password or "",
+                                 **SESSION_DEFAULTS, **session})
         del self._entries[MAX_ENTRIES:]
         self.save()
 
