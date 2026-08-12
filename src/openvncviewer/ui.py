@@ -70,6 +70,11 @@ WHEEL_NOTCH = 120
 # slider passes the wheel through untouched - and the default sits mid-track.
 WHEEL_SPEED_MIN, WHEEL_SPEED_MAX = 1, 100
 WHEEL_SPEED_DEFAULT = (WHEEL_SPEED_MIN + WHEEL_SPEED_MAX) // 2
+# A Retina desktop scaled into a window needs the notch count amplified to feel
+# like anything; a standard VNC server on ordinary hardware does not, and the
+# amplification just overshoots. So an unseen host starts in the middle for a
+# Mac and raw for everything else, decided by the macOS tick in the dialog.
+WHEEL_SPEED_RAW = WHEEL_SPEED_MIN
 # Ceiling on the clicks one wheel event may produce, so a fast flick cannot
 # flood the server. Must stay well above WHEEL_SPEED_MAX or it would quietly
 # cap the top of the slider instead of just catching runaway flicks.
@@ -473,16 +478,24 @@ class ConnectDialog(QDialog):
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.remove_button)
 
-        # Wired after the fields exist: filling the box fires the handler.
+        # Built before the history is wired: filling the host box fires the
+        # handler, which restores this server's saved wheel speed.
+        options = self._build_options(wheel_speed)
+
         self.reload_history()
         self.host.setEditText(host)
         self.host.activated.connect(self._history_selected)
         self.host.editTextChanged.connect(self._host_changed)
+        self.username.textChanged.connect(self._connection_type_changed)
+        # A saved server still overrides the given speed during this first
+        # pass; only the type default defers to it. See _apply_default_wheel_speed.
+        self._honour_given_speed = True
         self._host_changed(host)
+        self._honour_given_speed = False
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(self._build_options(wheel_speed))
+        layout.addWidget(options)
         layout.addStretch()
         layout.addLayout(buttons)
 
@@ -549,10 +562,19 @@ class ConnectDialog(QDialog):
                 self.server_name.clear()
                 self.password.clear()
                 self.save_password.setChecked(False)
+                self._apply_default_wheel_speed()
                 return
             self.server_name.setText(entry["name"])
             self.port.setValue(entry["port"])
             self.username.setText(entry["username"])
+            self.share_clipboard.setChecked(entry["share_clipboard"])
+            self.alt_is_command.setChecked(entry["alt_is_command"])
+            # None means this server predates saved wheel speeds, so fall back
+            # to what its connection type implies rather than to a fixed value.
+            if entry["wheel_speed"] is None:
+                self._apply_default_wheel_speed()
+            else:
+                self.wheel_speed.setValue(entry["wheel_speed"])
 
             saved = secretstore.decrypt(entry.get("password", ""))
             # A token that will not decrypt - written by another user, or on
@@ -561,6 +583,39 @@ class ConnectDialog(QDialog):
             self.save_password.setChecked(bool(saved))
         finally:
             self._updating = False
+
+    def _apply_default_wheel_speed(self):
+        """Set the speed an unseen host should start at, from its type.
+
+        Only ever called for a host with no saved speed - once a server has
+        one, that wins and toggling the tick leaves it alone. Otherwise
+        changing your mind about the macOS option would silently undo a speed
+        you had deliberately chosen.
+        """
+        if self._honour_given_speed:
+            # The speed the dialog was opened with continues the last session
+            # and outranks the type default. Only a host the user then selects
+            # or types gets the default.
+            return
+        # A username means an ARD login, which means a Mac - the same signal
+        # the Username field already advertises, and the one that decides the
+        # security type at connect. The macOS keyboard tick is deliberately not
+        # used: it defaults on, so every new connection would look like a Mac.
+        is_mac = bool(self.username.text().strip())
+        self.wheel_speed.setValue(
+            WHEEL_SPEED_DEFAULT if is_mac else WHEEL_SPEED_RAW)
+
+    def _connection_type_changed(self):
+        """Re-decide the default when the username makes the type clearer.
+
+        Only while the host has no saved speed - once a server has one, that
+        wins, or typing a username would undo a speed you had chosen.
+        """
+        if self._updating:
+            return  # a saved server is being restored; its own values stand
+        entry = self._history.find(self.host.currentText().strip())
+        if entry is None or entry["wheel_speed"] is None:
+            self._apply_default_wheel_speed()
 
     def remove_selected(self):
         """Forget just the server currently shown, so repeated clicks work."""
@@ -636,7 +691,24 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("&About", self.show_about)
 
+        # Alt+F, Alt+V and Alt+H belong to the remote while a session is up.
+        # The titles are restored on disconnect, so keyboard access to the
+        # menus is only given up for as long as something else needs the key.
+        self._menus = [(file_menu, "&File"), (view_menu, "&View"),
+                       (help_menu, "&Help")]
+
         self.last_connection = ("", 5900, "", WHEEL_SPEED_DEFAULT)
+
+    def _set_menu_mnemonics(self, enabled):
+        """Take the menu bar out of the Alt namespace while a session is up.
+
+        RemoteView claims ShortcutOverride, but a mnemonic is matched
+        application-wide rather than at the focused widget, so Alt+V could
+        still open the View menu. Removing the mnemonic removes the shortcut
+        entirely, which does not depend on where Qt routes the event.
+        """
+        for menu, title in self._menus:
+            menu.setTitle(title if enabled else title.replace("&", ""))
 
     def set_fullscreen(self, enabled):
         """Give the whole screen to the remote desktop, chrome included.
@@ -717,7 +789,11 @@ class MainWindow(QMainWindow):
         token = secretstore.encrypt(password) if save_password else None
         # Held until the session actually comes up: the list is of servers
         # connected to, not of hosts typed.
-        self._pending_history = (host, port, username, server_name, token or "")
+        self._pending_history = ((host, port, username, server_name,
+                                  token or ""),
+                                 {"wheel_speed": wheel_speed,
+                                  "share_clipboard": share_clipboard,
+                                  "alt_is_command": alt_is_command})
         # Revoking a saved password is not a history update and must not wait
         # for the connection to succeed. Untick the box, fail to connect, and
         # deferring this would leave the old token on disk after the user asked
@@ -735,6 +811,8 @@ class MainWindow(QMainWindow):
             on_clipboard=self.signals.clipboard.emit,
         )
         self.view.attach(self.client)
+        self._set_menu_mnemonics(False)
+        self.view.setFocus()
         self.client.start()
 
     def disconnect(self):
@@ -742,6 +820,7 @@ class MainWindow(QMainWindow):
             self.client.stop()
             self.client = None
         self.view.detach()
+        self._set_menu_mnemonics(True)
         self.server_name = ""
         self.setWindowTitle("OpenVNCViewer")
         self.status.setText("Not connected")
@@ -749,7 +828,8 @@ class MainWindow(QMainWindow):
     def _on_resize(self, width, height):
         self.view.on_resize(width, height)
         if self._pending_history:
-            self.history.remember(*self._pending_history)
+            positional, session = self._pending_history
+            self.history.remember(*positional, **session)
             self._pending_history = None
 
         # Anything copied before the session came up was never sent - there was
@@ -790,6 +870,7 @@ class MainWindow(QMainWindow):
     def _on_disconnect(self, reason):
         self.view.detach()
         self.client = None
+        self._set_menu_mnemonics(True)
         self._pending_history = None  # never connected, so nothing to remember
         # A window still titled after the server it is no longer showing reads
         # as a live session.
