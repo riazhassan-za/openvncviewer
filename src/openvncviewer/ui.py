@@ -84,6 +84,21 @@ WHEEL_CLICK_LIMIT = 500
 # the wire. Coalesce them to roughly one frame's worth.
 POINTER_INTERVAL_MS = 16
 
+# Auto-reconnect: how long to wait before each silent redial. The first two
+# are quick, so a momentary blip is over before it is noticed; after that it
+# backs off to fifteen seconds, which is both kinder to a server that is not
+# there and long enough to still be trying when a real outage ends.
+#
+# TCP needs about fifteen seconds to report a peer that vanished without
+# closing (see rfb.KEEPALIVE_IDLE_MS), so the useful measure is not the number
+# of tries but how long the sequence keeps going: roughly a minute and three
+# quarters after the drop is noticed.
+RECONNECT_DELAYS_MS = (500, 500, 1000, 2000, 4000, 8000,
+                       15000, 15000, 15000, 15000, 15000, 15000)
+RECONNECT_ATTEMPTS = len(RECONNECT_DELAYS_MS)
+# Derived so the tooltip and the README cannot drift from the schedule.
+RECONNECT_WINDOW_S = sum(RECONNECT_DELAYS_MS) // 1000
+
 
 # X11 keysyms for the two modifiers whose meaning we may swap.
 SUPER_L = 0xFFEB  # macOS reads this as Command
@@ -387,7 +402,8 @@ class RemoteView(QWidget):
 class ConnectDialog(QDialog):
     def __init__(self, host="", port=5900, username="",
                  wheel_speed=WHEEL_SPEED_DEFAULT, share_clipboard=True,
-                 alt_is_command=True, history=None, parent=None):
+                 alt_is_command=True, auto_reconnect=True, history=None,
+                 parent=None):
         super().__init__(parent)
         self.setWindowTitle("Connect to a VNC server")
         self._history = history if history is not None else ServerHistory(
@@ -438,6 +454,18 @@ class ConnectDialog(QDialog):
             "and RFB\ncarries it in the clear. Untick this when that matters."
             "\n\nmacOS Screen Sharing does not carry the clipboard over RFB, "
             "so this\nhas no effect when connected to a Mac.")
+
+        self.auto_reconnect = QCheckBox("Reconnect automatically if the link drops")
+        self.auto_reconnect.setChecked(auto_reconnect)
+        self.auto_reconnect.setToolTip(
+            f"Silently redial when a session that was up is cut off - a Wi-Fi "
+            f"roam, a\nsleeping link, a server restarting.\n\n"
+            f"{RECONNECT_ATTEMPTS} attempts over about "
+            f"{RECONNECT_WINDOW_S // 60}m {RECONNECT_WINDOW_S % 60}s: the "
+            f"first within half a second,\nthen backing off to every 15 "
+            f"seconds.\n\n"
+            "Only ever retries a connection that had already succeeded, and "
+            "stops at once\nif the server refuses the password.")
 
         self.save_password = QCheckBox("Save password for this server")
         if secretstore.available():
@@ -526,6 +554,7 @@ class ConnectDialog(QDialog):
         inner.addLayout(ends)
         inner.addWidget(self.share_clipboard)
         inner.addWidget(self.alt_is_command)
+        inner.addWidget(self.auto_reconnect)
         return options
 
     # ------------------------------------------------------------- history
@@ -569,6 +598,7 @@ class ConnectDialog(QDialog):
             self.username.setText(entry["username"])
             self.share_clipboard.setChecked(entry["share_clipboard"])
             self.alt_is_command.setChecked(entry["alt_is_command"])
+            self.auto_reconnect.setChecked(entry["auto_reconnect"])
             # None means this server predates saved wheel speeds, so fall back
             # to what its connection type implies rather than to a fixed value.
             if entry["wheel_speed"] is None:
@@ -639,7 +669,8 @@ class ConnectDialog(QDialog):
                 self.wheel_speed.value(), self.server_name.text().strip(),
                 self.save_password.isChecked(),
                 self.share_clipboard.isChecked(),
-                self.alt_is_command.isChecked())
+                self.alt_is_command.isChecked(),
+                self.auto_reconnect.isChecked())
 
 
 class MainWindow(QMainWindow):
@@ -663,6 +694,17 @@ class MainWindow(QMainWindow):
         self.signals.clipboard.connect(self._on_remote_clipboard)
 
         self.share_clipboard = True
+        # Auto-reconnect state. `_session` holds the arguments to replay, and
+        # doubles as the "there is a session to go back to" flag; it is set
+        # when connecting and cleared only when the user stops.
+        self.auto_reconnect = False
+        self._session = None
+        self._reconnect_attempt = 0
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        # The interval is set per attempt, from RECONNECT_DELAYS_MS.
+        self._reconnect_timer.timeout.connect(self._retry_connection)
+
         self._clipboard_primed = False
         # Text we put on the clipboard ourselves, or last sent. Without this
         # the server's text lands locally, fires dataChanged, and goes straight
@@ -765,18 +807,37 @@ class MainWindow(QMainWindow):
                                parent=self)
         if dialog.exec() == QDialog.Accepted:
             (host, port, username, password, wheel_speed, name,
-             save_password, share_clipboard, alt_is_command) = dialog.values()
+             save_password, share_clipboard, alt_is_command,
+             auto_reconnect) = dialog.values()
             if host:
                 self.connect_to(host, port, username, password, wheel_speed,
                                 name, save_password, share_clipboard,
-                                alt_is_command)
+                                alt_is_command, auto_reconnect)
 
     def connect_to(self, host, port, username, password,
                    wheel_speed=WHEEL_SPEED_DEFAULT, server_name="",
                    save_password=False, share_clipboard=True,
-                   alt_is_command=True):
-        self.disconnect()
+                   alt_is_command=True, auto_reconnect=False):
+        # Not `disconnect`: that is the user saying stop, and it abandons the
+        # retry sequence. Dialling somewhere new only ends the current session.
+        self._reconnect_timer.stop()
+        # Any session begun from here is a fresh one with a full retry budget.
+        # _retry_connection is the sole exception and puts the count back.
+        self._reconnect_attempt = 0
+        self._teardown()
         self.share_clipboard = share_clipboard
+        self.auto_reconnect = auto_reconnect
+        # Everything needed to dial this server again without asking. The
+        # password is held for the life of the session either way - RFBClient
+        # keeps its own copy - so this adds no exposure that was not there.
+        self._session = {
+            "host": host, "port": port, "username": username,
+            "password": password, "wheel_speed": wheel_speed,
+            "server_name": server_name, "save_password": save_password,
+            "share_clipboard": share_clipboard,
+            "alt_is_command": alt_is_command,
+            "auto_reconnect": auto_reconnect,
+        }
         self.view.alt_is_command = alt_is_command
         # A fresh session has seen none of our clipboard yet, so forget what we
         # told the last one and offer the current contents once it is up.
@@ -793,7 +854,8 @@ class MainWindow(QMainWindow):
                                   token or ""),
                                  {"wheel_speed": wheel_speed,
                                   "share_clipboard": share_clipboard,
-                                  "alt_is_command": alt_is_command})
+                                  "alt_is_command": alt_is_command,
+                                  "auto_reconnect": auto_reconnect})
         # Revoking a saved password is not a history update and must not wait
         # for the connection to succeed. Untick the box, fail to connect, and
         # deferring this would leave the old token on disk after the user asked
@@ -815,7 +877,14 @@ class MainWindow(QMainWindow):
         self.view.setFocus()
         self.client.start()
 
-    def disconnect(self):
+    def _teardown(self):
+        """End the live session, leaving the reconnect sequence alone.
+
+        Split from `disconnect` because a silent redial has to do all of this
+        between attempts - the framebuffer belongs to the client that just
+        died, and the view holds a pointer into it - without that counting as
+        the user giving up.
+        """
         if self.client:
             self.client.stop()
             self.client = None
@@ -823,9 +892,56 @@ class MainWindow(QMainWindow):
         self._set_menu_mnemonics(True)
         self.server_name = ""
         self.setWindowTitle("OpenVNCViewer")
+
+    def disconnect(self):
+        """The user asked to stop. Abandons any reconnect in flight."""
+        self._reconnect_timer.stop()
+        self._reconnect_attempt = 0
+        self._session = None
+        self._teardown()
         self.status.setText("Not connected")
 
+    # ----------------------------------------------------------- reconnecting
+
+    def _should_reconnect(self):
+        """Whether a session that just ended is worth silently redialling.
+
+        Must be asked before the client is torn down, since it is the client
+        that knows how far it got. A sequence only *starts* when a session
+        that was actually up got cut off: a host that never answered is far
+        more often a typo or a server that is not running, and ten silent
+        retries would only delay saying so. Once started it continues on
+        failed attempts too, or a link that stays down for a second would
+        exhaust the budget on the first try.
+        """
+        if not (self.auto_reconnect and self._session):
+            return False  # not wanted here, or the user has stopped
+        if self.client is not None and self.client.auth_failed:
+            # The password will not have improved in half a second, and
+            # repeating a rejected one can lock the account out.
+            return False
+        return bool(self._reconnect_attempt
+                    or (self.client is not None and self.client.was_connected))
+
+    def _retry_connection(self):
+        """One silent redial, on the wait set when the link went."""
+        session = self._session
+        if not session:
+            return
+        attempt = self._reconnect_attempt + 1
+        host, port = session["host"], session["port"]
+        self.connect_to(**session)  # zeroes the counter
+        self._reconnect_attempt = attempt
+        # connect_to has just announced a plain "Connecting to ...", which is
+        # true but reads as a fresh session the user started. Say what this
+        # actually is, and keep the count visible while the dial is in flight.
+        self.status.setText(f"Reconnecting to {host}:{port} "
+                            f"(attempt {attempt} of {RECONNECT_ATTEMPTS})...")
+
     def _on_resize(self, width, height):
+        # The session is up, so the retry budget is spent and replenished. Any
+        # later drop starts counting from one again.
+        self._reconnect_attempt = 0
         self.view.on_resize(width, height)
         if self._pending_history:
             positional, session = self._pending_history
@@ -868,15 +984,25 @@ class MainWindow(QMainWindow):
             self._clipboard_echo = text
 
     def _on_disconnect(self, reason):
-        self.view.detach()
-        self.client = None
-        self._set_menu_mnemonics(True)
-        self._pending_history = None  # never connected, so nothing to remember
+        # Asked first: the answer depends on the client that _teardown drops.
+        retrying = self._should_reconnect()
         # A window still titled after the server it is no longer showing reads
         # as a live session.
-        self.server_name = ""
-        self.setWindowTitle("OpenVNCViewer")
+        self._teardown()
+        self._pending_history = None  # never connected, so nothing to remember
+
+        if retrying and self._reconnect_attempt < RECONNECT_ATTEMPTS:
+            # The count already made indexes the wait before the next one.
+            delay = RECONNECT_DELAYS_MS[self._reconnect_attempt]
+            self.status.setText(
+                f"Connection lost - reconnecting in {delay / 1000:g}s "
+                f"(attempt {self._reconnect_attempt + 1} "
+                f"of {RECONNECT_ATTEMPTS})...")
+            self._reconnect_timer.start(delay)
+            return
+
         self.status.setText(f"Disconnected: {reason}" if reason else "Disconnected")
+        # Only now, once the retries are spent, is it worth interrupting.
         if reason:
             QMessageBox.warning(self, "Disconnected", reason)
 

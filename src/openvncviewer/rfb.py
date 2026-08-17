@@ -67,6 +67,15 @@ MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
 # 4096-bit group with generator 5; the floor is well below that because older
 # releases may not, and the ceiling only exists to stop a server forcing
 # arbitrarily expensive modular exponentiation on us.
+# How long a silent link is given before TCP starts probing it, and how often
+# it probes after that. Windows uses a fixed retry count of 10, so a dead peer
+# is reported after roughly KEEPALIVE_IDLE + 10 * KEEPALIVE_INTERVAL - about
+# fifteen seconds. Long enough that a busy server is never mistaken for a dead
+# one; short enough to be worth waiting through.
+KEEPALIVE_IDLE_MS = 5000
+KEEPALIVE_INTERVAL_MS = 1000
+KEEPALIVE_PROBES = 10
+
 DH_MIN_KEY_BYTES = 128
 DH_MAX_KEY_BYTES = 1024
 DH_MIN_PRIME_BITS = 1024
@@ -91,6 +100,15 @@ _VERIFIED_PRIME_DIGESTS = frozenset({
 
 class RFBError(Exception):
     pass
+
+
+class AuthError(RFBError):
+    """The server refused the credentials, or offered nothing we can speak.
+
+    Separate from RFBError so a caller retrying a dropped link can tell the two
+    apart. A network failure may well clear in half a second; a rejected
+    password will not, and repeating it can lock the account out.
+    """
 
 
 def _ignore(*args):
@@ -126,6 +144,38 @@ def encode_clipboard(text):
     the text, and beats sending mojibake the far side would paste.
     """
     return _clean_text(text).encode("latin-1", "replace")
+
+
+def enable_keepalive(sock):
+    """Ask TCP to notice a peer that has silently gone away.
+
+    Without this a dropped link is invisible rather than fatal. The read blocks
+    with no timeout, and because a FramebufferUpdateRequest is only sent after
+    an update arrives, a server that has stopped talking leaves nothing being
+    written for the retransmission timer to fail on either. A Mac that loses
+    Wi-Fi, sleeps, or changes network then hangs the session instead of ending
+    it - and a session that never ends is never reconnected.
+
+    The tuning is best-effort: SO_KEEPALIVE on its own still works, it just
+    falls back to the system default, which on Windows is two hours.
+    """
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    try:
+        if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows
+            # Windows takes idle and interval together and fixes the probe
+            # count itself, so KEEPALIVE_PROBES is descriptive here, not a
+            # setting.
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS,
+                       (1, KEEPALIVE_IDLE_MS, KEEPALIVE_INTERVAL_MS))
+        else:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE,
+                            KEEPALIVE_IDLE_MS // 1000)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL,
+                            KEEPALIVE_INTERVAL_MS // 1000)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT,
+                            KEEPALIVE_PROBES)
+    except (OSError, AttributeError):
+        pass
 
 
 def _reverse_bits(byte):
@@ -175,6 +225,13 @@ class RFBClient:
         self.desktop_name = ""
         self.framebuffer = bytearray()
 
+        # Read by the caller once the session has ended, to decide whether
+        # dialling again is worth it. `was_connected` stays true after the
+        # link drops - it records that there was a session, not that there
+        # still is one.
+        self.was_connected = False
+        self.auth_failed = False
+
         self._sock = None
         self._reader = None
         self._send_lock = threading.Lock()
@@ -210,6 +267,7 @@ class RFBClient:
         except Exception as exc:  # network/protocol failure ends the session
             if self._running:
                 reason = str(exc) or exc.__class__.__name__
+                self.auth_failed = isinstance(exc, AuthError)
         finally:
             self._running = False
             if self._sock is not None:
@@ -235,6 +293,7 @@ class RFBClient:
         self._sock = socket.create_connection((self.host, self.port), timeout=15)
         self._sock.settimeout(None)
         self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        enable_keepalive(self._sock)
         self._reader = self._sock.makefile("rb")
 
         version = self._read(12)
@@ -262,6 +321,7 @@ class RFBClient:
         # Only now may input be sent: anything written before this point would
         # be spliced into the handshake and the server would drop us.
         self._ready = True
+        self.was_connected = True
         self._resize(width, height)
         self.request_update(incremental=False)
 
@@ -269,12 +329,15 @@ class RFBClient:
         if proto == 3:
             sec_type = struct.unpack("!I", self._read(4))[0]
             if sec_type == 0:
-                raise RFBError(self._read_failure_reason())
+                raise AuthError(self._read_failure_reason())
             offered = [sec_type]
         else:
             count = self._read(1)[0]
             if count == 0:
-                raise RFBError(self._read_failure_reason())
+                # An empty list is the server refusing the connection outright,
+                # commonly "too many authentication failures" - which is a
+                # lockout, so dialling straight back is the worst response.
+                raise AuthError(self._read_failure_reason())
             offered = list(self._read(count))
 
         chosen = self._choose_security(offered)
@@ -292,8 +355,8 @@ class RFBClient:
         # versions send it only where authentication actually happened.
         if proto == 8 or chosen != SEC_NONE:
             if struct.unpack("!I", self._read(4))[0] != 0:
-                raise RFBError(self._read_failure_reason() if proto == 8
-                               else "authentication failed - check the password")
+                raise AuthError(self._read_failure_reason() if proto == 8
+                                else "authentication failed - check the password")
 
     def _choose_security(self, offered):
         """Pick the strongest scheme we can actually satisfy.
@@ -313,7 +376,7 @@ class RFBClient:
         for fallback in (SEC_ARD, SEC_VNC):
             if fallback in offered:
                 return fallback
-        raise RFBError(
+        raise AuthError(
             f"no authentication type this client supports (server offers "
             f"{offered}). Supported: 30 (macOS account), 2 (VNC password), "
             "1 (none). On a Mac, enable Screen Sharing and allow access for "

@@ -284,6 +284,63 @@ The setting is remembered for the rest of the session, so reconnecting keeps
 your choice. A ceiling of 500 clicks per wheel event stops a fast flick
 flooding the server.
 
+## Auto-reconnect
+
+**Reconnect automatically if the link drops** is in the Options group and is
+**on by default**. When a session that was up gets cut off — a Wi-Fi roam, a
+sleeping link, a switch relearning, a Mac waking — the viewer redials without
+saying anything. If one of those succeeds the session simply carries on. Only
+when the whole budget is spent does it report the failure the way it always
+did.
+
+**12 attempts over about 1m 46s**, backing off so a blip costs nothing and a
+real outage is still being retried when it ends:
+
+| Attempt | Wait before it |
+| --- | --- |
+| 1–2 | 0.5s |
+| 3–6 | 1s, 2s, 4s, 8s |
+| 7–12 | 15s |
+
+### Noticing the link has gone
+
+A dropped Wi-Fi link does **not** break a TCP connection. Toggling Wi-Fi off
+and on again on the remote Mac usually leaves the session intact: nothing is
+sent either way while the link is down, so nothing fails, and traffic simply
+resumes. Your screen freezes and catches up — no reconnect happens, because
+nothing disconnected.
+
+That is also why a Mac that *really* goes away — shut down, moved network,
+asleep for a while — used to hang the viewer indefinitely rather than end the
+session. The read blocks with no timeout, and since a framebuffer update is
+only requested after one arrives, there is nothing being written to fail
+either.
+
+So the client enables **TCP keepalive** (5s idle, 1s probes). Windows fixes
+the probe count at 10, which puts detection at roughly **15 seconds** — long
+enough that a busy server is never mistaken for a dead one, and comfortably
+inside the retry window above.
+
+The screen goes grey between attempts rather than holding the last frame: that
+image is a view onto the framebuffer of the connection that just died, and
+leaving it up would be both a lie and a use-after-free. The status bar shows
+which attempt is running.
+
+Three limits are deliberate:
+
+- **A connection that never came up is not retried.** A host that does not
+  answer is far more often a typo or a server that is not running, and five
+  silent seconds before saying so helps nobody. The first attempt has to have
+  reached a live session for anything to be retried.
+- **A refused password stops it dead.** The credentials will not have improved
+  in half a second, and repeating a rejected one can lock the account out —
+  macOS in particular starts refusing connections outright after a few tries.
+- **Disconnecting, or connecting elsewhere, abandons it.** Nothing dials back
+  after you have said stop.
+
+Like the other session options this is stored per server, so a flaky laptop
+can have it on while a server you would rather be told about has it off.
+
 ## How the macOS login works
 
 macOS announces itself as `RFB 003.889`; the client replies `RFB 003.008` and
