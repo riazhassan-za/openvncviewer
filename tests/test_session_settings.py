@@ -182,7 +182,8 @@ class DialogTest(unittest.TestCase):
     def test_defaults_cover_every_setting_the_dialog_saves(self):
         """A new option must be added to SESSION_DEFAULTS to be persisted."""
         self.assertEqual(set(SESSION_DEFAULTS),
-                         {"wheel_speed", "share_clipboard", "alt_is_command"})
+                         {"wheel_speed", "share_clipboard", "alt_is_command",
+                          "auto_reconnect"})
 
 
 if __name__ == "__main__":

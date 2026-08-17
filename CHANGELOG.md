@@ -6,6 +6,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-17
+
+### Added
+
+- **Auto-reconnect.** A session that was up and gets cut off is now silently
+  redialled — **12 attempts over about 1m 46s**, the first within half a
+  second and backing off to every 15 seconds — before the failure is reported.
+  A Wi-Fi roam or a sleeping link stops ending the session outright.
+  *Reconnect automatically if the link drops* is in the Options group of the
+  connect dialog, is **on by default**, and is remembered per server alongside
+  the wheel speed and the other session settings.
+
+- **TCP keepalive**, at 5s idle with 1s probes. Without it a peer that
+  vanished without closing was never noticed at all: the read blocks with no
+  timeout, and because a framebuffer update is only requested after one
+  arrives, a server that stops talking leaves nothing being written for the
+  retransmission timer to fail on either. A Mac that lost Wi-Fi, slept or
+  changed network hung the session instead of ending it — and a session that
+  never ends is never reconnected. Detection is now about 15 seconds, well
+  inside the retry window.
+
+  This applies whether or not auto-reconnect is ticked: a dead link is now
+  reported promptly instead of leaving the window apparently frozen.
+
+  Three things auto-reconnect deliberately will not do:
+
+  - **Retry a connection that never came up.** A host that did not answer is
+    far more often a typo than an outage, and a silent minute and a half
+    before saying so helps nobody. A sequence only starts once a live session
+    has dropped — though once started it continues across attempts that fail
+    to connect, which is the whole point of spreading them out.
+  - **Retry a refused password.** The credentials will not have improved in
+    half a second, and repeating a rejected one can lock the account out.
+    macOS starts refusing connections outright after a few failures.
+  - **Retry after you said stop.** Disconnecting, connecting elsewhere, or
+    closing the window abandons any attempt in flight.
+
+  The view is cleared between attempts rather than holding the last frame: the
+  image wraps the framebuffer of the client that just died. The status bar
+  shows which attempt is running and how long the next wait is.
+
+### Changed
+
+- The RFB layer distinguishes an authentication failure from a network or
+  protocol one (`rfb.AuthError`), and records whether a session ever came up.
+  Auto-reconnect needs both, and deciding either by matching on the text of an
+  error message would break the first time a server worded its refusal
+  differently.
+
 ## [0.11.0] - 2026-08-08
 
 ### Added
@@ -476,7 +525,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.0...v0.9.1

@@ -188,9 +188,10 @@ would have to change to widen it, not a backlog anyone has committed to.
   UTF-8, and is worth doing for standard VNC servers. It is moot for macOS,
   which does not do RFB clipboard at all.
 
-- [ ] `ConnectDialog.values()` now returns an eight-item positional tuple, and
-  every option added to it has broken the same two tests. A named tuple would
-  cost little and stop that recurring.
+- [ ] `ConnectDialog.values()` now returns a **ten**-item positional tuple, and
+  every option added to it has broken the same two tests — three times now,
+  most recently for auto-reconnect. A named tuple would cost little and stop
+  that recurring.
 - [ ] **No cursor pseudo-encodings.** The server renders the pointer into the
   framebuffer, which is what we want for a scaled view, but it means the local
   cursor and the remote cursor can visibly disagree during fast movement.
@@ -199,7 +200,18 @@ would have to change to widen it, not a backlog anyone has committed to.
 - [ ] No client-initiated remote resize. Scaling is purely client-side by
   design — but some users will expect the Mac's resolution to follow the window
   and should be told it does not.
-- [ ] No reconnect or retry on a dropped link; the session simply ends.
+- [x] Reconnect on a dropped link. A session that was up is redialled 12 times
+  over about 1m 45s, backing off from half a second to fifteen, when *Reconnect
+  automatically if the link drops* is ticked. Never for a connection that
+  failed to come up in the first place, and never after the server refused the
+  credentials.
+
+  The reconnect logic was the easy half. The half that actually mattered was
+  **noticing**: a dropped Wi-Fi link does not break a TCP connection, and with
+  no read timeout and nothing being written between framebuffer updates, a
+  peer that vanished was never detected at all. TCP keepalive now does that in
+  ~15s. Worth remembering before adding any other "the link went" behaviour —
+  the session ending is not the same event as the link going.
 - [x] RFB 3.3 servers work and are tested. A 3.3 server dictates the security
   type rather than offering a list, and differs from 3.7/3.8 in when it sends
   `SecurityResult`; both are handled.
