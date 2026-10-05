@@ -25,11 +25,14 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPushButton, QSlider,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QSpinBox, QVBoxLayout, QWidget, QTextEdit, QRadioButton,
+                               QButtonGroup)
 
 from . import __version__, secretstore
 from .history import ServerHistory
 from .rfb import RFBClient
+from .text_input import TextSender
+from .host_panel import HostListPanel
 
 HOMEPAGE = "https://github.com/riazhassan-za/openvncviewer"
 
@@ -364,6 +367,14 @@ class RemoteView(QWidget):
             event.accept()
             return True
 
+        # Ctrl+Shift+V: open text input dialog
+        if (event.type() == QEvent.Type.KeyPress and
+                event.key() == Qt.Key_V and
+                event.modifiers() & Qt.ControlModifier and
+                event.modifiers() & Qt.ShiftModifier):
+            self._prompt_text_input()
+            return True
+
         # Handled here rather than in keyPressEvent so Tab reaches the remote
         # host instead of moving focus.
         if self._client and event.type() in (QEvent.Type.KeyPress,
@@ -393,6 +404,40 @@ class RemoteView(QWidget):
             if self._client:
                 self._client.send_key(keysym, False)
         self._pressed.clear()
+
+    def _prompt_text_input(self):
+        """Show dialog to send text via simulated key presses (Ctrl+Shift+V)."""
+        if not self._client:
+            return
+
+        # Get the window this widget belongs to for the dialog parent
+        window = self.window()
+        dialog = TextInputDialog(parent=window)
+
+        if dialog.exec() == QDialog.Accepted:
+            self._send_text_input(dialog.text, dialog.delay)
+
+    def _send_text_input(self, text, delay_ms):
+        """Send text to remote host by simulating key presses."""
+        if not self._client or not text:
+            return
+
+        sender = TextSender(self._client, delay_ms=delay_ms)
+        sender.finished.connect(lambda: self._on_text_sent(sender))
+        sender.error.connect(lambda msg: self._on_text_error(msg, sender))
+        sender.send_text(text)
+
+    def _on_text_sent(self, sender):
+        """Called when text sending completes."""
+        self.setFocus()
+
+    def _on_text_error(self, error_msg, sender):
+        """Called when text sending encounters an error."""
+        self.setFocus()
+        # Find parent window for error dialog
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            QMessageBox.warning(window, "Text Input Error", error_msg)
 
     def focusOutEvent(self, event):
         self.release_all_keys()
@@ -673,18 +718,145 @@ class ConnectDialog(QDialog):
                 self.auto_reconnect.isChecked())
 
 
+class TextInputDialog(QDialog):
+    """Dialog for sending text to remote via simulated key presses."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Send Text to Remote")
+        self.setMinimumWidth(400)
+        self._text_sender = None
+        self._sending = False
+
+        layout = QVBoxLayout(self)
+
+        # Radio buttons for input source
+        source_layout = QHBoxLayout()
+        self.source_group = QButtonGroup()
+        self.clipboard_radio = QRadioButton("From Clipboard")
+        self.manual_radio = QRadioButton("Enter Text")
+        self.clipboard_radio.setChecked(True)
+        self.source_group.addButton(self.clipboard_radio, 0)
+        self.source_group.addButton(self.manual_radio, 1)
+        source_layout.addWidget(self.clipboard_radio)
+        source_layout.addWidget(self.manual_radio)
+        layout.addLayout(source_layout)
+
+        # Text input area (initially hidden)
+        self.text_input = QTextEdit()
+        self.text_input.setPlaceholderText("Enter text to send...")
+        self.text_input.setMaximumHeight(150)
+        self.text_input.setVisible(False)
+        layout.addWidget(self.text_input)
+
+        # Info label
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("color: gray; font-size: 12px;")
+        layout.addWidget(self.info_label)
+        self._update_info()
+
+        # Delay setting
+        delay_layout = QHBoxLayout()
+        delay_layout.addWidget(QLabel("Delay between keys (ms):"))
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setMinimum(10)
+        self.delay_spin.setMaximum(500)
+        self.delay_spin.setValue(TextSender.DEFAULT_DELAY_MS)
+        self.delay_spin.setSingleStep(10)
+        delay_layout.addWidget(self.delay_spin)
+        delay_layout.addStretch()
+        layout.addLayout(delay_layout)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.send_button = QPushButton("Send")
+        self.send_button.clicked.connect(self._on_send)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addStretch()
+        button_layout.addWidget(self.send_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+
+        # Connect signals
+        self.clipboard_radio.toggled.connect(self._on_source_changed)
+        self.manual_radio.toggled.connect(self._on_source_changed)
+
+    def _on_source_changed(self, checked):
+        """Show/hide text input based on selected source."""
+        use_manual = self.manual_radio.isChecked()
+        self.text_input.setVisible(use_manual)
+        if use_manual:
+            self.text_input.setFocus()
+        self._update_info()
+
+    def _update_info(self):
+        """Update info label based on current source."""
+        if self.clipboard_radio.isChecked():
+            clipboard_text = QApplication.clipboard().text()
+            if clipboard_text:
+                preview = clipboard_text[:50]
+                if len(clipboard_text) > 50:
+                    preview += "..."
+                self.info_label.setText(f"Will send from clipboard:\n{preview}")
+            else:
+                self.info_label.setText("Clipboard is empty")
+        else:
+            self.info_label.setText("Enter text to be sent via key simulation")
+
+    def _on_send(self):
+        """Prepare text and close dialog."""
+        if self.clipboard_radio.isChecked():
+            self.text = QApplication.clipboard().text()
+        else:
+            self.text = self.text_input.toPlainText()
+
+        if not self.text:
+            QMessageBox.warning(self, "No Text", "Please enter or copy text first")
+            return
+
+        self.delay = self.delay_spin.value()
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("OpenVNCViewer")
+
+        # Create central widget as container
+        central_widget = QWidget()
+        central_layout = QHBoxLayout(central_widget)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+
+        # Left sidebar with saved servers
+        self.history = ServerHistory(default_history_path())
+        self.host_panel = HostListPanel(self.history)
+        self.host_panel.connect_requested.connect(self._on_panel_connect_requested)
+        self.host_panel.add_requested.connect(self._on_panel_add_requested)
+        self.host_panel.edit_requested.connect(self._on_panel_edit_requested)
+        self.host_panel.disconnect_requested.connect(self._on_panel_disconnect_requested)
+        self.host_panel.refresh_requested.connect(self._on_panel_refresh_requested)
+        central_layout.addWidget(self.host_panel)
+
+        # Divider
+        divider = QWidget()
+        divider.setMaximumWidth(1)
+        divider.setStyleSheet("background-color: #ddd;")
+        central_layout.addWidget(divider)
+
+        # Remote view
         self.view = RemoteView()
-        self.setCentralWidget(self.view)
+        central_layout.addWidget(self.view)
+
+        self.setCentralWidget(central_widget)
+
         self.status = QLabel("Not connected")
         self.statusBar().addWidget(self.status)
-        self.resize(1280, 800)
+        self.resize(1400, 800)  # Wider to accommodate sidebar
 
         self.client = None
-        self.history = ServerHistory(default_history_path())
         self._pending_history = None
         self.server_name = ""
         self.signals = ClientSignals()
@@ -726,6 +898,14 @@ class MainWindow(QMainWindow):
         self.fullscreen_action.toggled.connect(self.set_fullscreen)
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.fullscreen_action)
+
+        # Toggle sidebar action
+        self.toggle_sidebar_action = QAction("Show &Sidebar", self)
+        self.toggle_sidebar_action.setCheckable(True)
+        self.toggle_sidebar_action.setChecked(True)
+        self.toggle_sidebar_action.triggered.connect(self._toggle_sidebar)
+        view_menu.addAction(self.toggle_sidebar_action)
+
         # Also owned by the window, so F11 still works once the menu bar is
         # hidden - otherwise full screen would be a one-way door.
         self.addAction(self.fullscreen_action)
@@ -805,6 +985,10 @@ class MainWindow(QMainWindow):
     def prompt_connect(self):
         dialog = ConnectDialog(*self.last_connection, history=self.history,
                                parent=self)
+        self._connect_from_dialog(dialog)
+
+    def _connect_from_dialog(self, dialog):
+        """Connect with the values from an accepted standard dialog."""
         if dialog.exec() == QDialog.Accepted:
             (host, port, username, password, wheel_speed, name,
              save_password, share_clipboard, alt_is_command,
@@ -889,6 +1073,7 @@ class MainWindow(QMainWindow):
             self.client.stop()
             self.client = None
         self.view.detach()
+        self.host_panel.set_disconnected_state()
         self._set_menu_mnemonics(True)
         self.server_name = ""
         self.setWindowTitle("OpenVNCViewer")
@@ -963,6 +1148,9 @@ class MainWindow(QMainWindow):
         self.status.setText(f"{where} - remote desktop {width}x{height}, "
                             "scaled to window")
 
+        if self.client and self._session:
+            self.host_panel.set_connected_state(self._session["host"])
+
     def _on_remote_clipboard(self, text):
         """The server copied something; mirror it locally."""
         if not self.share_clipboard or not text:
@@ -1005,6 +1193,78 @@ class MainWindow(QMainWindow):
         # Only now, once the retries are spent, is it worth interrupting.
         if reason:
             QMessageBox.warning(self, "Disconnected", reason)
+
+    def _on_panel_connect_requested(self, host, port, server_name):
+        """Handle connection request from sidebar panel."""
+        # Find the server entry in history
+        entry = None
+        for hist_entry in self.history.entries():
+            if hist_entry["host"] == host and hist_entry["port"] == port:
+                entry = hist_entry
+                break
+
+        if not entry:
+            # Fallback: just use the host and port
+            self.auto_reconnect = True
+            self.connect_to(host, port, "", "", server_name=server_name)
+            return
+
+        # Use saved credentials from history
+        username = entry.get("username", "")
+        # History stores a DPAPI token, not a plaintext password.  The
+        # connection dialog decrypts it before calling connect_to(); the
+        # sidebar must follow the same path or the token itself is sent to the
+        # VNC server and authentication fails.
+        password = secretstore.decrypt(entry.get("password", "")) or ""
+        wheel_speed = entry.get("wheel_speed", WHEEL_SPEED_DEFAULT)
+
+        self.auto_reconnect = True
+        self.connect_to(
+            host, port, username, password,
+            wheel_speed=wheel_speed,
+            server_name=server_name or entry.get("name", ""),
+            save_password=bool(password),
+            share_clipboard=entry.get("share_clipboard", True),
+            alt_is_command=entry.get("alt_is_command", True),
+            auto_reconnect=True
+        )
+
+    def _on_panel_edit_requested(self, host, port):
+        """Open the standard Connect dialog pre-filled from a sidebar item."""
+        entry = next((item for item in self.history.entries()
+                      if item["host"] == host and item["port"] == port), None)
+        if not entry:
+            return
+
+        dialog = ConnectDialog(
+            host,
+            port,
+            entry.get("username", ""),
+            entry.get("wheel_speed", WHEEL_SPEED_DEFAULT),
+            entry.get("share_clipboard", True),
+            entry.get("alt_is_command", True),
+            entry.get("auto_reconnect", True),
+            history=self.history,
+            parent=self,
+        )
+        self._connect_from_dialog(dialog)
+
+    def _on_panel_add_requested(self):
+        """Open an empty standard connection dialog for a new server."""
+        dialog = ConnectDialog(history=self.history, parent=self)
+        self._connect_from_dialog(dialog)
+
+    def _on_panel_disconnect_requested(self):
+        """Disconnect the active VNC session from the sidebar menu."""
+        self.disconnect()
+
+    def _on_panel_refresh_requested(self):
+        """Refresh the host list panel."""
+        self.host_panel.refresh_list()
+
+    def _toggle_sidebar(self):
+        """Toggle sidebar visibility."""
+        self.host_panel.setVisible(self.toggle_sidebar_action.isChecked())
 
     def closeEvent(self, event):
         self.disconnect()
