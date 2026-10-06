@@ -19,8 +19,11 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QIcon, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLabel, QMessageBox, QMenu
+    QPushButton, QLabel, QMessageBox, QMenu, QCheckBox
 )
+
+# Qt's QWIDGETSIZE_MAX, which PySide6 does not export.
+QWIDGETSIZE_MAX = (1 << 24) - 1
 
 
 class HostListPanel(QWidget):
@@ -32,6 +35,7 @@ class HostListPanel(QWidget):
     edit_requested = Signal(str, int)  # host, port
     disconnect_requested = Signal()
     refresh_requested = Signal()
+    collapsed_changed = Signal(bool)
 
     def __init__(self, history, parent=None):
         """Initialize the host list panel.
@@ -42,10 +46,25 @@ class HostListPanel(QWidget):
         """
         super().__init__(parent)
         self.history = history
-        self.setMinimumWidth(250)
-        self.setMaximumWidth(350)
 
-        layout = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Collapsed, the panel is just this button against the left edge.
+        self.expand_btn = QPushButton("»")
+        self.expand_btn.setFixedWidth(24)
+        self.expand_btn.setToolTip("Show saved servers")
+        self.expand_btn.clicked.connect(lambda: self.set_collapsed(False))
+        self.expand_btn.hide()
+        outer.addWidget(self.expand_btn, alignment=Qt.AlignTop)
+
+        # No maximum: the main window gives the panel a share of its width.
+        self.body = QWidget()
+        self.body.setMinimumWidth(200)
+        outer.addWidget(self.body)
+
+        layout = QVBoxLayout(self.body)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
@@ -62,7 +81,18 @@ class HostListPanel(QWidget):
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
         header_layout.addStretch()
         header_layout.addWidget(self.refresh_btn)
+
+        self.collapse_btn = QPushButton("«")
+        self.collapse_btn.setMaximumWidth(30)
+        self.collapse_btn.setToolTip("Hide saved servers")
+        self.collapse_btn.clicked.connect(lambda: self.set_collapsed(True))
+        header_layout.addWidget(self.collapse_btn)
         layout.addLayout(header_layout)
+
+        # Alphabetical unless ticked; history itself is kept most recent first.
+        self.sort_by_last_used = QCheckBox("Sort by last used")
+        self.sort_by_last_used.toggled.connect(self.refresh_list)
+        layout.addWidget(self.sort_by_last_used)
 
         # List widget for servers
         self.list_widget = QListWidget()
@@ -129,6 +159,9 @@ class HostListPanel(QWidget):
             self.delete_btn.setEnabled(False)
             return
 
+        if not self.sort_by_last_used.isChecked():
+            entries.sort(key=lambda entry: self._format_entry(entry).casefold())
+
         for entry in entries:
             item_text = self._format_entry(entry)
             item = QListWidgetItem(item_text)
@@ -146,6 +179,15 @@ class HostListPanel(QWidget):
         self.status_label.setText(f"{count} server{'s' if count != 1 else ''} saved")
         self.edit_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
+
+    def set_collapsed(self, collapsed):
+        """Fold the panel down to the expand button, or open it again."""
+        self.body.setVisible(not collapsed)
+        self.expand_btn.setVisible(collapsed)
+        # Folded, it must not keep its share of the window's width.
+        self.setMaximumWidth(self.expand_btn.width() if collapsed
+                             else QWIDGETSIZE_MAX)
+        self.collapsed_changed.emit(collapsed)
 
     def _format_entry(self, entry):
         """Format a server entry for display."""

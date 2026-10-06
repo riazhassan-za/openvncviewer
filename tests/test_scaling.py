@@ -878,6 +878,59 @@ class RecentServersTest(unittest.TestCase):
 
         self.assertNotIn("192.168.0.8", self.sidebar_hosts(window))
 
+    def test_sidebar_is_alphabetical_unless_sorting_by_last_used(self):
+        self.history.remember("alpha.host", 5900)  # now the most recent
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+
+        # Sorted on what is shown: "Studio Mac", not its address.
+        self.assertEqual(self.sidebar_hosts(window),
+                         ["alpha.host", "192.168.0.8", "vnc.example.com"])
+
+        window.host_panel.sort_by_last_used.setChecked(True)
+        self.assertEqual(self.sidebar_hosts(window), self.history.hosts())
+
+    def test_sidebar_collapse_keeps_the_menu_in_step(self):
+        window = self.make_window()
+        panel = window.host_panel
+
+        panel.collapse_btn.click()
+        self.assertTrue(panel.body.isHidden())
+        self.assertFalse(panel.expand_btn.isHidden())
+        self.assertFalse(window.toggle_sidebar_action.isChecked())
+
+        window.toggle_sidebar_action.trigger()
+        self.assertFalse(panel.body.isHidden())
+        self.assertTrue(panel.expand_btn.isHidden())
+
+    def test_sidebar_takes_a_fifth_of_the_window_until_collapsed(self):
+        window = self.make_window()
+        window.resize(1280, 800)
+        window.show()
+        QApplication.processEvents()
+        self.assertAlmostEqual(window.host_panel.width() / 1280, 0.2,
+                               delta=0.01)
+
+        window.host_panel.set_collapsed(True)
+        QApplication.processEvents()
+        self.assertEqual(window.host_panel.width(),
+                         window.host_panel.expand_btn.width())
+
+    def test_sidebar_reopens_at_the_width_it_was_dragged_to(self):
+        window = self.make_window()
+        window.resize(1280, 800)
+        window.show()
+        QApplication.processEvents()
+
+        window.splitter.moveSplitter(500, 1)
+        window._remember_sidebar_width()  # splitterMoved fires only for a mouse drag
+        window.host_panel.set_collapsed(True)
+        window.host_panel.set_collapsed(False)
+        QApplication.processEvents()
+
+        self.assertEqual(window.host_panel.width(), 500)
+
     def test_sidebar_disconnect_uses_the_normal_disconnect_handler(self):
         window = self.make_window()
         calls = []
