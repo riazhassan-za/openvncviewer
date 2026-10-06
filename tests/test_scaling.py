@@ -8,9 +8,9 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
-from PySide6.QtGui import (QImage, QKeySequence, QMouseEvent,  # noqa: E402
+from PySide6.QtGui import (QColor, QImage, QKeySequence, QMouseEvent,  # noqa: E402
                            QWheelEvent)
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 import openvncviewer.ui as ui_module  # noqa: E402
 from openvncviewer import secretstore  # noqa: E402
@@ -729,6 +729,164 @@ class RecentServersTest(unittest.TestCase):
         window._on_disconnect("connection refused")
         self.assertIsNone(self.history.find("bad.host"))
 
+    def test_sidebar_connection_decrypts_the_saved_password(self):
+        """The sidebar must not send History's encrypted token as a password."""
+        token = "encrypted-password-token"
+        self.history.remember("panel.example", 5900, "amy", "Panel Mac",
+                              password=token)
+        window = self.make_window()
+        calls = []
+        window.connect_to = lambda *args, **kwargs: calls.append((args, kwargs))
+
+        original = ui_module.secretstore.decrypt
+        ui_module.secretstore.decrypt = lambda value: "hunter2" if value == token else None
+        self.addCleanup(setattr, ui_module.secretstore, "decrypt", original)
+
+        window._on_panel_connect_requested("panel.example", 5900, "Panel Mac")
+
+        self.assertEqual(len(calls), 1)
+        args, kwargs = calls[0]
+        self.assertEqual(args[:4], ("panel.example", 5900, "amy", "hunter2"))
+        self.assertTrue(kwargs["save_password"])
+
+    def test_sidebar_edit_opens_the_full_connect_dialog(self):
+        self.history.remember(
+            "panel.example", 5901, "amy", "Panel Mac",
+            wheel_speed=5, share_clipboard=False, alt_is_command=False,
+            auto_reconnect=False,
+        )
+        window = self.make_window()
+        created = []
+
+        class FakeDialog:
+            def __init__(self, *args, **kwargs):
+                created.append((args, kwargs))
+
+            def exec(self):
+                return QDialog.Rejected
+
+        original = ui_module.ConnectDialog
+        ui_module.ConnectDialog = FakeDialog
+        self.addCleanup(setattr, ui_module, "ConnectDialog", original)
+
+        window._on_panel_edit_requested("panel.example", 5901)
+
+        self.assertEqual(len(created), 1)
+        args, kwargs = created[0]
+        self.assertEqual(args, ("panel.example", 5901, "amy", 5,
+                                False, False, False))
+        self.assertIs(kwargs["history"], self.history)
+        self.assertIs(kwargs["parent"], window)
+
+    def test_sidebar_new_opens_an_empty_connect_dialog(self):
+        window = self.make_window()
+        created = []
+
+        class FakeDialog:
+            def __init__(self, *args, **kwargs):
+                created.append((args, kwargs))
+
+            def exec(self):
+                return QDialog.Rejected
+
+        original = ui_module.ConnectDialog
+        ui_module.ConnectDialog = FakeDialog
+        self.addCleanup(setattr, ui_module, "ConnectDialog", original)
+
+        window._on_panel_add_requested()
+
+        self.assertEqual(len(created), 1)
+        args, kwargs = created[0]
+        self.assertEqual(args, ())
+        self.assertIs(kwargs["history"], self.history)
+        self.assertIs(kwargs["parent"], window)
+
+    def test_sidebar_connection_fills_in_a_missing_wheel_speed(self):
+        """A server saved before wheel speeds existed has None, not a number."""
+        self.history.remember("old.mac", 5900, "amy")
+        self.history.remember("old.vnc", 5900)
+        window = self.make_window()
+        calls = []
+        window.connect_to = lambda *args, **kwargs: calls.append(kwargs)
+
+        window._on_panel_connect_requested("old.mac", 5900, "")
+        window._on_panel_connect_requested("old.vnc", 5900, "")
+
+        self.assertEqual(calls[0]["wheel_speed"], WHEEL_SPEED_DEFAULT)
+        self.assertEqual(calls[1]["wheel_speed"], ui_module.WHEEL_SPEED_RAW)
+
+    def test_sidebar_connection_keeps_the_saved_auto_reconnect(self):
+        self.history.remember("panel.example", 5900, "amy",
+                              auto_reconnect=False)
+        window = self.make_window()
+        calls = []
+        window.connect_to = lambda *args, **kwargs: calls.append(kwargs)
+
+        window._on_panel_connect_requested("panel.example", 5900, "")
+
+        self.assertFalse(calls[0]["auto_reconnect"])
+
+    def test_sidebar_edit_opens_for_a_server_with_no_wheel_speed(self):
+        self.history.remember("old.mac", 5900, "amy")
+        window = self.make_window()
+        dialogs = []
+        original = ui_module.ConnectDialog
+
+        class RejectingDialog(original):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                dialogs.append(self)
+
+            def exec(self):
+                return QDialog.Rejected
+
+        ui_module.ConnectDialog = RejectingDialog
+        self.addCleanup(setattr, ui_module, "ConnectDialog", original)
+
+        window._on_panel_edit_requested("old.mac", 5900)
+
+        self.assertEqual(dialogs[0].wheel_speed.value(), WHEEL_SPEED_DEFAULT)
+
+    def sidebar_hosts(self, window):
+        panel = window.host_panel
+        return [panel.list_widget.item(index).data(Qt.UserRole)["host"]
+                for index in range(panel.list_widget.count())]
+
+    def test_sidebar_lists_a_server_once_it_connects(self):
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+
+        window.connect_to("new.host", 5900, "", "")
+        window._on_resize(REMOTE_W, REMOTE_H)
+
+        self.assertIn("new.host", self.sidebar_hosts(window))
+
+    def test_sidebar_drops_a_server_removed_in_the_connect_dialog(self):
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+        self.assertIn("192.168.0.8", self.sidebar_hosts(window))
+        history = self.history
+
+        class RemovingDialog:
+            def exec(self):
+                history.remove("192.168.0.8")
+                return QDialog.Rejected
+
+        window._connect_from_dialog(RemovingDialog())
+
+        self.assertNotIn("192.168.0.8", self.sidebar_hosts(window))
+
+    def test_sidebar_disconnect_uses_the_normal_disconnect_handler(self):
+        window = self.make_window()
+        calls = []
+        window.disconnect = lambda: calls.append(True)
+
+        window._on_panel_disconnect_requested()
+
+        self.assertEqual(calls, [True])
+
     def test_the_server_name_reaches_the_window_title_and_status(self):
         window = self.make_window()
         window.connect_to("192.168.0.8", 5900, "someone", "pw",
@@ -736,6 +894,24 @@ class RecentServersTest(unittest.TestCase):
         window._on_resize(REMOTE_W, REMOTE_H)
         self.assertIn("Studio Mac", window.windowTitle())
         self.assertIn("Studio Mac", window.status.text())
+
+    def test_sidebar_highlights_the_connected_host_and_clears_on_disconnect(self):
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+
+        window.connect_to("192.168.0.8", 5900, "someone", "pw",
+                          WHEEL_SPEED_DEFAULT, "Studio Mac")
+        window._on_resize(REMOTE_W, REMOTE_H)
+
+        item = next(window.host_panel.list_widget.item(index)
+                    for index in range(window.host_panel.list_widget.count())
+                    if window.host_panel.list_widget.item(index).data(Qt.UserRole)["host"]
+                    == "192.168.0.8")
+        self.assertEqual(item.background().color(), QColor("#d0e8ff"))
+
+        window.disconnect()
+        self.assertEqual(item.background().color(), QColor("white"))
 
     def test_disconnecting_resets_the_title_and_status(self):
         window = self.make_window()

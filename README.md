@@ -135,9 +135,11 @@ python -m venv .venv
 
 Or, once installed, just `openvncviewer`.
 
-`--host`, `--port` and `--user` prefill the connect dialog. The password is
-always typed into the dialog — never passed on the command line, where it would
-land in shell history and the process list.
+The main window opens without a connection dialog. Use **File → Connect** or
+**+ New** in the server sidebar to open one. `--host`, `--port` and `--user`
+prefill the dialog opened from **File → Connect**. The password is always typed
+into the dialog — never passed on the command line, where it would land in
+shell history and the process list.
 
 ## Scaling
 
@@ -178,6 +180,19 @@ The list lives in `servers.json` under your user config directory —
 hostnames, ports, usernames and your names for them, and is written
 atomically, so a crash mid-save leaves the previous list intact rather than a
 corrupt file.
+
+### Saved servers sidebar
+
+A left sidebar lists servers you have connected to. **Double-click** an entry
+to reconnect with its saved credentials, or right-click it for **Connect**,
+**Disconnect**, **Edit**, **Delete**, and **Properties**. **Disconnect** stops
+the current session.
+
+**+ New** opens a blank connection dialog. **Edit** opens the same full dialog
+with the selected server's host, port, credentials, and options filled in.
+Pressing **Connect** uses those settings; the list updates after a successful
+connection. The sidebar highlights the active server and can be hidden from
+the **View** menu.
 
 ### Saving passwords
 
@@ -228,6 +243,26 @@ Windows CRLF line endings are converted to the bare LF the protocol requires,
 and back, so pasted text does not arrive with doubled or missing line breaks.
 A trailing NUL — which some Windows applications leave on the clipboard — is
 stripped rather than forwarded. Text over 1 MB is not shared.
+
+## Text input via simulated key presses
+
+While connected, **Ctrl+Shift+V** opens a dialog that sends text as individual
+key presses instead of using the remote clipboard. This is useful when the
+server does not support clipboard sharing, including macOS Screen Sharing.
+
+The dialog offers two modes:
+
+- **From Clipboard**: Send text directly from your clipboard (shown as a preview)
+- **Enter Text**: Type or paste text in the dialog
+
+You can adjust the delay between key presses (10–500ms) to match your server's
+responsiveness. The default is 50ms. Printable ASCII, Latin-1 characters,
+Enter, and Tab are supported; other Unicode characters are skipped.
+
+**Security note:** Manual entry does not put text on the local clipboard; the
+**From Clipboard** option reads text that is already there. Key events still
+travel over the VNC connection, so use an encrypted connection when sending
+sensitive text.
 
 ## Full screen
 

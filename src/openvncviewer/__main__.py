@@ -48,7 +48,6 @@ def main():
     window.last_connection = (args.host, args.port, args.user,
                               WHEEL_SPEED_DEFAULT)
     window.show()
-    window.prompt_connect()
     return app.exec()
 
 
