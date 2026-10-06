@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPushButton, QSlider,
                                QSpinBox, QVBoxLayout, QWidget, QTextEdit, QRadioButton,
-                               QButtonGroup)
+                               QButtonGroup, QSplitter)
 
 from . import __version__, secretstore
 from .history import ServerHistory
@@ -66,6 +66,9 @@ KEYSYMS = {
 KEYSYMS.update({getattr(Qt, f"Key_F{n}"): 0xFFBD + n for n in range(1, 13)})
 
 BUTTONS = {Qt.LeftButton: 1, Qt.MiddleButton: 2, Qt.RightButton: 4}
+
+# The saved-servers sidebar's share of the window width until it is dragged.
+SIDEBAR_FRACTION = 0.2
 
 # One notch of a standard mouse wheel, in eighths of a degree (Qt's unit).
 WHEEL_NOTCH = 120
@@ -824,11 +827,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("OpenVNCViewer")
 
-        # Create central widget as container
-        central_widget = QWidget()
-        central_layout = QHBoxLayout(central_widget)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
+        # A splitter, so the sidebar can be dragged wider or narrower. It
+        # collapses with its own « button, never by being dragged shut.
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(4)
+        self.splitter.setStyleSheet("QSplitter::handle { background-color: #ddd; }")
+        self.splitter.splitterMoved.connect(self._remember_sidebar_width)
+        # The sidebar's share of the window, kept so it reopens where it was.
+        self._sidebar_fraction = SIDEBAR_FRACTION
 
         # Left sidebar with saved servers
         self.history = ServerHistory(default_history_path())
@@ -838,19 +845,15 @@ class MainWindow(QMainWindow):
         self.host_panel.edit_requested.connect(self._on_panel_edit_requested)
         self.host_panel.disconnect_requested.connect(self._on_panel_disconnect_requested)
         self.host_panel.refresh_requested.connect(self._on_panel_refresh_requested)
-        central_layout.addWidget(self.host_panel)
-
-        # Divider
-        divider = QWidget()
-        divider.setMaximumWidth(1)
-        divider.setStyleSheet("background-color: #ddd;")
-        central_layout.addWidget(divider)
+        self.splitter.addWidget(self.host_panel)
 
         # Remote view
         self.view = RemoteView()
-        central_layout.addWidget(self.view)
+        self.splitter.addWidget(self.view)
+        # Sized on first show, once the window knows its own width.
+        self._sidebar_sized = False
 
-        self.setCentralWidget(central_widget)
+        self.setCentralWidget(self.splitter)
 
         self.status = QLabel("Not connected")
         self.statusBar().addWidget(self.status)
@@ -905,6 +908,8 @@ class MainWindow(QMainWindow):
         self.toggle_sidebar_action.setChecked(True)
         self.toggle_sidebar_action.triggered.connect(self._toggle_sidebar)
         view_menu.addAction(self.toggle_sidebar_action)
+        # The panel's own « and » buttons must keep the menu tick truthful.
+        self.host_panel.collapsed_changed.connect(self._on_sidebar_collapsed)
 
         # Also owned by the window, so F11 still works once the menu bar is
         # hidden - otherwise full screen would be a one-way door.
@@ -1280,9 +1285,31 @@ class MainWindow(QMainWindow):
         """Refresh the host list panel."""
         self.host_panel.refresh_list()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._sidebar_sized:
+            self._sidebar_sized = True
+            self._apply_sidebar_width()
+
+    def _on_sidebar_collapsed(self, collapsed):
+        self.toggle_sidebar_action.setChecked(not collapsed)
+        if not collapsed:
+            # The splitter left it at button width; give it its share back.
+            self._apply_sidebar_width()
+
+    def _apply_sidebar_width(self):
+        total = sum(self.splitter.sizes()) or self.width()
+        sidebar = round(total * self._sidebar_fraction)
+        self.splitter.setSizes([sidebar, total - sidebar])
+
+    def _remember_sidebar_width(self):
+        sizes = self.splitter.sizes()
+        if self.host_panel.body.isVisible() and sum(sizes):
+            self._sidebar_fraction = sizes[0] / sum(sizes)
+
     def _toggle_sidebar(self):
         """Toggle sidebar visibility."""
-        self.host_panel.setVisible(self.toggle_sidebar_action.isChecked())
+        self.host_panel.set_collapsed(not self.toggle_sidebar_action.isChecked())
 
     def closeEvent(self, event):
         self.disconnect()
