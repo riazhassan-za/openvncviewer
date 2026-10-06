@@ -38,11 +38,27 @@ class TestTextSenderCharConversion(unittest.TestCase):
                 result = TextSender._char_to_keysym(char)
                 self.assertEqual(result, expected_sym)
 
-    def test_char_to_keysym_unsupported(self):
-        """Test unsupported characters return None."""
-        # Extended Unicode character
-        result = TextSender._char_to_keysym('\u0100')  # Ā (A with macron)
-        self.assertIsNone(result)
+    def test_char_to_keysym_unicode(self):
+        """Test characters above Latin-1 use Unicode keysyms."""
+        test_cases = [
+            (chr(0x0100), 0x01000100),  # A with macron
+            (chr(0x20AC), 0x010020AC),  # Euro sign
+            (chr(0x201C), 0x0100201C),  # Left smart quote
+        ]
+        for char, expected_sym in test_cases:
+            with self.subTest(char=char):
+                result = TextSender._char_to_keysym(char)
+                self.assertEqual(result, expected_sym)
+
+    def test_char_to_keysym_latin1(self):
+        """Test Latin-1 characters map to their code point."""
+        self.assertEqual(TextSender._char_to_keysym(chr(0xE9)), 0xE9)
+
+    def test_char_to_keysym_control_chars(self):
+        """Test unmapped control characters return None."""
+        for code in (0x00, 0x1B, 0x7F, 0x85, 0x9F):
+            with self.subTest(code=hex(code)):
+                self.assertIsNone(TextSender._char_to_keysym(chr(code)))
 
     def test_char_to_keysym_ascii_range(self):
         """Test that all ASCII printable characters map correctly."""

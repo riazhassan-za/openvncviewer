@@ -989,7 +989,13 @@ class MainWindow(QMainWindow):
 
     def _connect_from_dialog(self, dialog):
         """Connect with the values from an accepted standard dialog."""
-        if dialog.exec() == QDialog.Accepted:
+        accepted = dialog.exec() == QDialog.Accepted
+        # The dialog's Remove button edits history whether or not it was
+        # accepted, so the sidebar must catch up either way.
+        self.host_panel.refresh_list()
+        if self.client and self._session:
+            self.host_panel.set_connected_state(self._session["host"])
+        if accepted:
             (host, port, username, password, wheel_speed, name,
              save_password, share_clipboard, alt_is_command,
              auto_reconnect) = dialog.values()
@@ -1132,6 +1138,7 @@ class MainWindow(QMainWindow):
             positional, session = self._pending_history
             self.history.remember(*positional, **session)
             self._pending_history = None
+            self.host_panel.refresh_list()  # highlighted below
 
         # Anything copied before the session came up was never sent - there was
         # no connection to send it over - so offer it now. Otherwise you copy
@@ -1216,9 +1223,8 @@ class MainWindow(QMainWindow):
         # sidebar must follow the same path or the token itself is sent to the
         # VNC server and authentication fails.
         password = secretstore.decrypt(entry.get("password", "")) or ""
-        wheel_speed = entry.get("wheel_speed", WHEEL_SPEED_DEFAULT)
+        wheel_speed = self._saved_wheel_speed(entry)
 
-        self.auto_reconnect = True
         self.connect_to(
             host, port, username, password,
             wheel_speed=wheel_speed,
@@ -1226,8 +1232,20 @@ class MainWindow(QMainWindow):
             save_password=bool(password),
             share_clipboard=entry.get("share_clipboard", True),
             alt_is_command=entry.get("alt_is_command", True),
-            auto_reconnect=True
+            auto_reconnect=entry["auto_reconnect"]
         )
+
+    @staticmethod
+    def _saved_wheel_speed(entry):
+        """The server's saved speed, or the type default when it has none.
+
+        History stores None for a server saved before wheel speeds existed,
+        so `.get` with a default is not enough. Same rule as ConnectDialog: a
+        username means a Mac.
+        """
+        if entry["wheel_speed"] is not None:
+            return entry["wheel_speed"]
+        return WHEEL_SPEED_DEFAULT if entry["username"] else WHEEL_SPEED_RAW
 
     def _on_panel_edit_requested(self, host, port):
         """Open the standard Connect dialog pre-filled from a sidebar item."""
@@ -1240,7 +1258,7 @@ class MainWindow(QMainWindow):
             host,
             port,
             entry.get("username", ""),
-            entry.get("wheel_speed", WHEEL_SPEED_DEFAULT),
+            self._saved_wheel_speed(entry),
             entry.get("share_clipboard", True),
             entry.get("alt_is_command", True),
             entry.get("auto_reconnect", True),

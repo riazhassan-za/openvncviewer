@@ -801,6 +801,83 @@ class RecentServersTest(unittest.TestCase):
         self.assertIs(kwargs["history"], self.history)
         self.assertIs(kwargs["parent"], window)
 
+    def test_sidebar_connection_fills_in_a_missing_wheel_speed(self):
+        """A server saved before wheel speeds existed has None, not a number."""
+        self.history.remember("old.mac", 5900, "amy")
+        self.history.remember("old.vnc", 5900)
+        window = self.make_window()
+        calls = []
+        window.connect_to = lambda *args, **kwargs: calls.append(kwargs)
+
+        window._on_panel_connect_requested("old.mac", 5900, "")
+        window._on_panel_connect_requested("old.vnc", 5900, "")
+
+        self.assertEqual(calls[0]["wheel_speed"], WHEEL_SPEED_DEFAULT)
+        self.assertEqual(calls[1]["wheel_speed"], ui_module.WHEEL_SPEED_RAW)
+
+    def test_sidebar_connection_keeps_the_saved_auto_reconnect(self):
+        self.history.remember("panel.example", 5900, "amy",
+                              auto_reconnect=False)
+        window = self.make_window()
+        calls = []
+        window.connect_to = lambda *args, **kwargs: calls.append(kwargs)
+
+        window._on_panel_connect_requested("panel.example", 5900, "")
+
+        self.assertFalse(calls[0]["auto_reconnect"])
+
+    def test_sidebar_edit_opens_for_a_server_with_no_wheel_speed(self):
+        self.history.remember("old.mac", 5900, "amy")
+        window = self.make_window()
+        dialogs = []
+        original = ui_module.ConnectDialog
+
+        class RejectingDialog(original):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                dialogs.append(self)
+
+            def exec(self):
+                return QDialog.Rejected
+
+        ui_module.ConnectDialog = RejectingDialog
+        self.addCleanup(setattr, ui_module, "ConnectDialog", original)
+
+        window._on_panel_edit_requested("old.mac", 5900)
+
+        self.assertEqual(dialogs[0].wheel_speed.value(), WHEEL_SPEED_DEFAULT)
+
+    def sidebar_hosts(self, window):
+        panel = window.host_panel
+        return [panel.list_widget.item(index).data(Qt.UserRole)["host"]
+                for index in range(panel.list_widget.count())]
+
+    def test_sidebar_lists_a_server_once_it_connects(self):
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+
+        window.connect_to("new.host", 5900, "", "")
+        window._on_resize(REMOTE_W, REMOTE_H)
+
+        self.assertIn("new.host", self.sidebar_hosts(window))
+
+    def test_sidebar_drops_a_server_removed_in_the_connect_dialog(self):
+        window = self.make_window()
+        window.host_panel.history = self.history
+        window.host_panel.refresh_list()
+        self.assertIn("192.168.0.8", self.sidebar_hosts(window))
+        history = self.history
+
+        class RemovingDialog:
+            def exec(self):
+                history.remove("192.168.0.8")
+                return QDialog.Rejected
+
+        window._connect_from_dialog(RemovingDialog())
+
+        self.assertNotIn("192.168.0.8", self.sidebar_hosts(window))
+
     def test_sidebar_disconnect_uses_the_normal_disconnect_handler(self):
         window = self.make_window()
         calls = []

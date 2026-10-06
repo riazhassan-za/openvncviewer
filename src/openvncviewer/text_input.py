@@ -113,13 +113,16 @@ class TextSender(QObject):
         if char in special_chars:
             return special_chars[char]
 
-        # For other characters, try Unicode mapping (limited support)
+        # Other control characters have no key to press
+        if code < 0x20 or 0x7F <= code <= 0x9F:
+            return None
+
+        # Latin-1 keysyms equal their code point
         if code < 0x100:
             return code
 
-        # Extended Unicode characters may not be supported
-        # Return None to skip them
-        return None
+        # Everything else uses the X11 Unicode keysym range
+        return 0x01000000 + code
 
     def stop(self):
         """Stop sending text if currently in progress."""
