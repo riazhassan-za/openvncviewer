@@ -6,6 +6,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-06
+
+### Added
+
+- **Saved servers sidebar**, contributed by @statkashaman (#14). A panel on
+  the left lists every server you have connected to. **Double-click** one to
+  reconnect with its saved credentials and settings, or right-click it for
+  **Connect**, **Disconnect**, **Edit**, **Delete** and **Properties**.
+  **+ New** and **Edit** open the full connect dialog. The main window now
+  opens without a connect dialog; **File → Connect** still opens one.
+
+  Servers are listed **alphabetically** by the name shown, so "Studio Mac"
+  sorts under S rather than by its address. Tick **Sort by last used** for
+  most recent first.
+
+  The sidebar opens at **a fifth of the window** and can be **dragged wider
+  or narrower** (not below 200px). **«** collapses it to a narrow **»**
+  button against the left edge, as does unticking **View → Show Sidebar**,
+  and it reopens at the width you left it. Neither the sort order nor the
+  width is remembered across restarts yet.
+
+- **Send text as key presses**, also from #14. **Ctrl+Shift+V** during a
+  session opens a dialog that types text on the remote one key at a time,
+  from the clipboard or typed in, for servers where clipboard sharing does
+  not work — including macOS Screen Sharing. The delay between keys is
+  adjustable from 10 to 500ms.
+
+  Any character can be sent, including €, smart quotes pasted from Word and
+  non-Latin letters, as X11 Unicode keysyms. Control characters other than
+  Enter and Tab are skipped rather than sent as keys that do not exist.
+
+### Fixed
+
+Found reviewing #14 before it merged, and never released:
+
+- A server saved before 0.11.0 has no wheel speed recorded. Connecting to one
+  from the sidebar crashed on the first wheel scroll, and **Edit** on it
+  failed to open. Both now fall back to the connection type's default, as
+  the connect dialog does.
+- Connecting from the sidebar ignored a server's *Reconnect automatically*
+  setting, turned it on, and saved that over your choice.
+- The sidebar did not update when a new server connected, or when one was
+  removed in the connect dialog.
+
 ## [0.12.0] - 2026-08-17
 
 ### Added
@@ -525,7 +569,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.9.1...v0.10.0

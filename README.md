@@ -191,8 +191,13 @@ the current session.
 **+ New** opens a blank connection dialog. **Edit** opens the same full dialog
 with the selected server's host, port, credentials, and options filled in.
 Pressing **Connect** uses those settings; the list updates after a successful
-connection. The sidebar highlights the active server and can be hidden from
-the **View** menu.
+connection. The sidebar highlights the active server.
+
+Servers are listed alphabetically by the name shown; tick **Sort by last
+used** to put the most recent first. The sidebar opens at a fifth of the
+window and can be dragged wider or narrower. **«** collapses it to a narrow
+**»** button against the left edge, as does unticking **View → Show Sidebar**,
+and it reopens at the width you left it.
 
 ### Saving passwords
 
@@ -256,8 +261,9 @@ The dialog offers two modes:
 - **Enter Text**: Type or paste text in the dialog
 
 You can adjust the delay between key presses (10–500ms) to match your server's
-responsiveness. The default is 50ms. Printable ASCII, Latin-1 characters,
-Enter, and Tab are supported; other Unicode characters are skipped.
+responsiveness. The default is 50ms. Any character can be sent, including €,
+smart quotes and non-Latin letters, as well as Enter and Tab; other control
+characters are skipped.
 
 **Security note:** Manual entry does not put text on the local clipboard; the
 **From Clipboard** option reads text that is already there. Key events still
