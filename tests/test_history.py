@@ -1,11 +1,21 @@
 """The recent-servers list: storage, ordering, and surviving a mangled file."""
 
 import json
+import multiprocessing
 import tempfile
 import unittest
 from pathlib import Path
 
 from openvncviewer.history import MAX_ENTRIES, ServerHistory
+
+
+def remember_in_process(path, prefix, ready, start):
+    history = ServerHistory(path)
+    ready.set()
+    if not start.wait(10):
+        raise RuntimeError("writers were not started")
+    for index in range(8):
+        history.remember(f"{prefix}-{index}", 5900)
 
 
 class ServerHistoryTest(unittest.TestCase):
@@ -29,6 +39,80 @@ class ServerHistoryTest(unittest.TestCase):
         self.assertEqual(entry["port"], 5900)
         self.assertEqual(entry["username"], "someone")
         self.assertEqual(entry["name"], "Studio Mac")
+
+    def test_a_stale_instance_cannot_restore_a_removed_server_or_token(self):
+        first = ServerHistory(self.path)
+        first.remember("removed", 5900, password="revoked-token")
+        stale = ServerHistory(self.path)
+        first.remove("removed")
+
+        stale.remember("other", 5900)
+
+        self.assertEqual(ServerHistory(self.path).hosts(), ["other"])
+        self.assertNotIn("revoked-token", self.path.read_text())
+
+    def test_a_stale_instance_cannot_restore_an_unsaved_password(self):
+        first = ServerHistory(self.path)
+        first.remember("kept", 5900, password="revoked-token")
+        stale = ServerHistory(self.path)
+        first.forget_password("kept")
+
+        stale.remember("other", 5900)
+
+        self.assertEqual(ServerHistory(self.path).find("kept")["password"], "")
+        self.assertNotIn("revoked-token", self.path.read_text())
+
+    def test_revocation_uses_the_current_token_and_keeps_newer_metadata(self):
+        first = ServerHistory(self.path)
+        first.remember("kept", 5900, name="Old name")
+        stale = ServerHistory(self.path)
+        first.remember("kept", 5901, name="New name", password="new-token",
+                       share_clipboard=False)
+
+        self.assertTrue(stale.forget_password("kept"))
+
+        entry = ServerHistory(self.path).find("kept")
+        self.assertEqual(entry["password"], "")
+        self.assertEqual(entry["port"], 5901)
+        self.assertEqual(entry["name"], "New name")
+        self.assertFalse(entry["share_clipboard"])
+
+    def test_removing_with_a_stale_instance_keeps_servers_added_elsewhere(self):
+        first = ServerHistory(self.path)
+        first.remember("removed", 5900)
+        stale = ServerHistory(self.path)
+        first.remember("new", 5900)
+
+        self.assertTrue(stale.remove("removed"))
+
+        self.assertEqual(ServerHistory(self.path).hosts(), ["new"])
+
+    def test_concurrent_processes_keep_both_sets_of_new_servers(self):
+        context = multiprocessing.get_context("spawn")
+        start = context.Event()
+        processes = []
+        for prefix in ("first", "second"):
+            ready = context.Event()
+            process = context.Process(target=remember_in_process,
+                                      args=(self.path, prefix, ready, start))
+            process.start()
+            processes.append(process)
+            self.assertTrue(ready.wait(10), "writer did not load its snapshot")
+        try:
+            start.set()
+            for process in processes:
+                process.join(10)
+                self.assertEqual(process.exitcode, 0, "writer did not finish")
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join()
+                process.close()
+
+        expected = {f"{prefix}-{index}" for prefix in ("first", "second")
+                    for index in range(8)}
+        self.assertEqual(set(ServerHistory(self.path).hosts()), expected)
 
     def test_most_recent_first_and_no_duplicates(self):
         history = ServerHistory(self.path)

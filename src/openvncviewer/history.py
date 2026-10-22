@@ -25,13 +25,54 @@ Standard library only, and the path is injected rather than discovered, so this
 is testable without Qt or a real home directory.
 """
 
+import errno
 import json
 import os
 import tempfile
+import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 MAX_ENTRIES = 20
 FORMAT_VERSION = 1
+
+
+@contextmanager
+def _history_lock(path):
+    # Lock a stable sibling, since atomic replacement changes the JSON file's
+    # inode/handle. Never unlink it: another instance may already have it open.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name + ".lock").open("a+b") as lock:
+        if lock.seek(0, os.SEEK_END) == 0:
+            lock.write(b"\0")
+            lock.flush()
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                lock.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK) \
+                        or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 # Per-server session settings, with the value used when a file predates them or
 # a host has never been connected to. `wheel_speed` of None means "decide from
@@ -131,7 +172,7 @@ class ServerHistory:
             })
         return cleaned[:MAX_ENTRIES]
 
-    def save(self):
+    def _save(self):
         payload = json.dumps({"version": FORMAT_VERSION, "servers": self._entries},
                              indent=2)
         try:
@@ -152,6 +193,19 @@ class ServerHistory:
             # connecting; the list simply will not survive this run. ValueError
             # matters too: an unusable path raises that rather than OSError.
             pass
+
+    def _change(self, operation):
+        with ExitStack() as cleanup:
+            try:
+                cleanup.enter_context(_history_lock(self.path))
+            except (OSError, ValueError):
+                # Keep the viewer usable, but never write a stale snapshot
+                # when the directory is unwritable or another writer is stuck.
+                return operation()
+            self.load()
+            result = operation()
+            self._save()
+            return result
 
     # ----------------------------------------------------------------- query
 
@@ -188,13 +242,16 @@ class ServerHistory:
         unknown = set(session) - set(SESSION_DEFAULTS)
         if unknown:
             raise TypeError(f"unknown session settings: {sorted(unknown)}")
-        self._entries = [e for e in self._entries if e["host"] != host]
-        self._entries.insert(0, {"host": host, "port": int(port),
-                                 "username": username or "", "name": name or "",
-                                 "password": password or "",
-                                 **SESSION_DEFAULTS, **session})
-        del self._entries[MAX_ENTRIES:]
-        self.save()
+        entry = {"host": host, "port": int(port),
+                 "username": username or "", "name": name or "",
+                 "password": password or "", **SESSION_DEFAULTS, **session}
+
+        def apply():
+            self._entries = [e for e in self._entries if e["host"] != host]
+            self._entries.insert(0, entry)
+            del self._entries[MAX_ENTRIES:]
+
+        self._change(apply)
 
     def forget_password(self, host):
         """Drop a saved password, leaving the entry and its order alone.
@@ -205,21 +262,25 @@ class ServerHistory:
         was a token to forget.
         """
         host = (host or "").strip()
-        for entry in self._entries:
-            if entry["host"] == host:
-                if not entry["password"]:
-                    return False
-                entry["password"] = ""
-                self.save()
-                return True
-        return False
+
+        def apply():
+            for entry in self._entries:
+                if entry["host"] == host and entry["password"]:
+                    entry["password"] = ""
+                    return True
+            return False
+
+        return self._change(apply)
 
     def remove(self, host):
         """Forget one server. Returns whether there was anything to forget."""
         host = (host or "").strip()
-        remaining = [e for e in self._entries if e["host"] != host]
-        if len(remaining) == len(self._entries):
-            return False
-        self._entries = remaining
-        self.save()
-        return True
+
+        def apply():
+            remaining = [e for e in self._entries if e["host"] != host]
+            if len(remaining) == len(self._entries):
+                return False
+            self._entries = remaining
+            return True
+
+        return self._change(apply)

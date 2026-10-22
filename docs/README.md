@@ -56,6 +56,11 @@ Fixed in **0.15.0**:
 | AUTH-01 / NET-4 | Medium | Supplying a username requires ARD; legacy VNC and unauthenticated fallback are refused before a selection or credential response is sent |
 | BL-1 | Medium | Queued UI events are bound to the session that emitted them, so a stopped session cannot change or disconnect its replacement |
 
+**BL-5 is addressed after 0.15.0 (unreleased):** history mutations take an
+inter-process lock, reload the current file, then apply only that operation.
+A stale instance updating another server cannot restore a removed entry or
+revoked password token. Older binaries do not participate in the lock.
+
 Still open, and tracked in [TODO.md](../TODO.md):
 
 | Finding | Severity | Summary |
@@ -63,7 +68,6 @@ Still open, and tracked in [TODO.md](../TODO.md):
 | IF-2 / BL-3 | Medium | One update can carry 65,535 DesktopSize rectangles, each causing a reallocation and a UI callback |
 | AUTH-02 | Medium | ARD accepts small-subgroup peer keys |
 | NET-3 | Medium | No post-connect deadlines; `stop()` does not reliably interrupt a buffered read |
-| BL-5 | Medium | Concurrent instances can undo history deletions through whole-file writes |
 | SC-01 / CFG-01 | Medium | Actions are referenced by mutable tags in a job holding `contents: write` |
 | SC-03 / CFG-03 | Medium | Dependencies are not hash-pinned at build time |
 | SC-04 | Medium | Releases are unsigned; `SHA256SUMS.txt` proves integrity, not authenticity |
