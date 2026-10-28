@@ -65,7 +65,7 @@ Fixed in **0.16.1**:
 | SC-01 / CFG-01 | Medium | Every external action is pinned to a full commit SHA, including the job holding `contents: write` |
 | SC-03 / CFG-03 | Medium | The Windows executable build verifies hashes for its complete dependency and build-tool set; the test matrix still exercises the declared ranges |
 
-Fixed for the next release:
+Fixed in **0.17.1**:
 
 | Finding | Severity | What changed |
 | --- | --- | --- |

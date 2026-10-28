@@ -21,8 +21,8 @@ An independent adversarial review of commit `4dbba56` is published in
 that audit. **AUTH-01/NET-4** is fixed in 0.15.0: a username now
 requires ARD rather than falling back to legacy VNC or no authentication.
 **IF-2/BL-3**, the handshake part of **NET-3**, **SC-01/CFG-01** and
-**SC-03/CFG-03** are fixed in 0.16.1. **AUTH-02** (ARD accepts small-subgroup
-peer keys) remains open.
+**SC-03/CFG-03** are fixed in 0.16.1, and **BL-5** in 0.17.1. **AUTH-02** (ARD
+accepts small-subgroup peer keys) remains open.
 
 - [x] **Diffie-Hellman parameters are validated** before the password is
   encrypted under a key derived from them. `rfb.py::_validate_dh_group` rejects
