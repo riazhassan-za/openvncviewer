@@ -145,4 +145,8 @@ class UpdateChecker(QObject):
         finally:
             self._data.clear()
             reply.deleteLater()
+            # A check is one request, so keep no connection open for reuse.
+            # Qt would close it ~30s later itself, printing "QIODevice::read
+            # (QSslSocket): device not open" to stderr.
+            self._manager.clearConnectionCache()
         self.finished.emit(release, error)

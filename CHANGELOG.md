@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-28
+
+### Fixed
+
+- **Two viewers open at once no longer undo each other's history
+  changes** (#30, from @Jhacarreiro). Each saved the whole server list it
+  loaded at startup, so the one that saved last brought back a server, or
+  a saved password, that the other had removed. Every change now takes a
+  lock, re-reads the list and applies only itself. Older versions do not
+  take the lock, so this protects only when both viewers are 0.17.1 or
+  later.
+
+  Two problems found while finishing it are fixed with it. A history file
+  that could not be read for a moment (another program holding it open)
+  was treated as empty, so the next change would have saved over every
+  other server; it is now left alone. And two viewers creating the lock
+  file at the same moment could lose one change.
+
+- **The update check no longer prints a warning 30 seconds later.** Qt
+  kept the connection to GitHub open for reuse and printed
+  `QIODevice::read (QSslSocket): device not open` when it closed it. A
+  check is one request, so the connection is now dropped as soon as it
+  finishes.
+
 ## [0.17.0] - 2026-10-28
 
 Contributed by @Jhacarreiro (#34).
@@ -740,7 +764,8 @@ First public release.
 - The remote view read its client attribute during `__init__`, before it was
   assigned, because Qt dispatches an event from `setMouseTracking`.
 
-[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/riazhassan-za/openvncviewer/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/riazhassan-za/openvncviewer/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/riazhassan-za/openvncviewer/compare/v0.15.1...v0.16.0
