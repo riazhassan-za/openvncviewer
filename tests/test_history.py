@@ -1,11 +1,22 @@
 """The recent-servers list: storage, ordering, and surviving a mangled file."""
 
 import json
+import multiprocessing
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from openvncviewer.history import MAX_ENTRIES, ServerHistory
+
+
+def remember_in_process(path, prefix, ready, start):
+    history = ServerHistory(path)
+    ready.set()
+    if not start.wait(10):
+        raise RuntimeError("writers were not started")
+    for index in range(8):
+        history.remember(f"{prefix}-{index}", 5900)
 
 
 class ServerHistoryTest(unittest.TestCase):
@@ -29,6 +40,80 @@ class ServerHistoryTest(unittest.TestCase):
         self.assertEqual(entry["port"], 5900)
         self.assertEqual(entry["username"], "someone")
         self.assertEqual(entry["name"], "Studio Mac")
+
+    def test_a_stale_instance_cannot_restore_a_removed_server_or_token(self):
+        first = ServerHistory(self.path)
+        first.remember("removed", 5900, password="revoked-token")
+        stale = ServerHistory(self.path)
+        first.remove("removed")
+
+        stale.remember("other", 5900)
+
+        self.assertEqual(ServerHistory(self.path).hosts(), ["other"])
+        self.assertNotIn("revoked-token", self.path.read_text())
+
+    def test_a_stale_instance_cannot_restore_an_unsaved_password(self):
+        first = ServerHistory(self.path)
+        first.remember("kept", 5900, password="revoked-token")
+        stale = ServerHistory(self.path)
+        first.forget_password("kept")
+
+        stale.remember("other", 5900)
+
+        self.assertEqual(ServerHistory(self.path).find("kept")["password"], "")
+        self.assertNotIn("revoked-token", self.path.read_text())
+
+    def test_revocation_uses_the_current_token_and_keeps_newer_metadata(self):
+        first = ServerHistory(self.path)
+        first.remember("kept", 5900, name="Old name")
+        stale = ServerHistory(self.path)
+        first.remember("kept", 5901, name="New name", password="new-token",
+                       share_clipboard=False)
+
+        self.assertTrue(stale.forget_password("kept"))
+
+        entry = ServerHistory(self.path).find("kept")
+        self.assertEqual(entry["password"], "")
+        self.assertEqual(entry["port"], 5901)
+        self.assertEqual(entry["name"], "New name")
+        self.assertFalse(entry["share_clipboard"])
+
+    def test_removing_with_a_stale_instance_keeps_servers_added_elsewhere(self):
+        first = ServerHistory(self.path)
+        first.remember("removed", 5900)
+        stale = ServerHistory(self.path)
+        first.remember("new", 5900)
+
+        self.assertTrue(stale.remove("removed"))
+
+        self.assertEqual(ServerHistory(self.path).hosts(), ["new"])
+
+    def test_concurrent_processes_keep_both_sets_of_new_servers(self):
+        context = multiprocessing.get_context("spawn")
+        start = context.Event()
+        processes = []
+        for prefix in ("first", "second"):
+            ready = context.Event()
+            process = context.Process(target=remember_in_process,
+                                      args=(self.path, prefix, ready, start))
+            process.start()
+            processes.append(process)
+            self.assertTrue(ready.wait(10), "writer did not load its snapshot")
+        try:
+            start.set()
+            for process in processes:
+                process.join(10)
+                self.assertEqual(process.exitcode, 0, "writer did not finish")
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join()
+                process.close()
+
+        expected = {f"{prefix}-{index}" for prefix in ("first", "second")
+                    for index in range(8)}
+        self.assertEqual(set(ServerHistory(self.path).hosts()), expected)
 
     def test_most_recent_first_and_no_duplicates(self):
         history = ServerHistory(self.path)
@@ -146,6 +231,35 @@ class ServerHistoryTest(unittest.TestCase):
             with self.subTest(junk=junk):
                 self.path.write_text(junk, encoding="utf-8")
                 self.assertEqual(ServerHistory(self.path).entries(), [])
+
+    def test_a_read_that_fails_during_a_change_does_not_wipe_the_list(self):
+        """Unreadable is not empty: another program holding the file open
+        must not turn one change into a list of just that server."""
+        history = ServerHistory(self.path)
+        for host in ("mac", "laptop", "nas"):
+            history.remember(host, 5900, password="tok-" + host)
+        read_text = Path.read_text
+
+        def fails_once(path, *args, **kwargs):
+            if path == self.path and not failed:
+                failed.append(path)
+                raise PermissionError(13, "sharing violation")
+            return read_text(path, *args, **kwargs)
+
+        failed = []
+        with mock.patch.object(Path, "read_text", fails_once):
+            history.remember("new", 5900)
+        self.assertTrue(failed, "the change did not re-read the file")
+
+        self.assertEqual(ServerHistory(self.path).hosts(), ["nas", "laptop", "mac"])
+        self.assertEqual(history.hosts(), ["new", "nas", "laptop", "mac"],
+                         "the change was lost from this instance too")
+
+    def test_a_corrupt_file_is_replaced_by_the_next_change(self):
+        self.path.write_text("not json at all", encoding="utf-8")
+        history = ServerHistory(self.path)
+        history.remember("mac.local", 5900)
+        self.assertEqual(ServerHistory(self.path).hosts(), ["mac.local"])
 
     def test_junk_entries_are_dropped_and_bad_ports_defaulted(self):
         self.path.write_text(json.dumps({"servers": [

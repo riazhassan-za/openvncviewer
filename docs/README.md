@@ -65,13 +65,18 @@ Fixed in **0.16.1**:
 | SC-01 / CFG-01 | Medium | Every external action is pinned to a full commit SHA, including the job holding `contents: write` |
 | SC-03 / CFG-03 | Medium | The Windows executable build verifies hashes for its complete dependency and build-tool set; the test matrix still exercises the declared ranges |
 
+Fixed for the next release:
+
+| Finding | Severity | What changed |
+| --- | --- | --- |
+| BL-5 | Medium | History changes take an inter-process lock and re-read the file, so a stale instance cannot restore a removed server or a revoked password token. Older builds do not take the lock |
+
 Still open, and tracked in [TODO.md](../TODO.md):
 
 | Finding | Severity | Summary |
 | --- | --- | --- |
 | AUTH-02 | Medium | ARD accepts small-subgroup peer keys |
 | NET-3 (rest) | Medium | DNS resolution and an established session's reads have no deadline |
-| BL-5 | Medium | Concurrent instances can undo history deletions through whole-file writes |
 | SC-04 | Medium | Releases are unsigned; `SHA256SUMS.txt` proves integrity, not authenticity |
 | IF-3 | Low | Trailing decompressed ZRLE bytes are accepted and discarded |
 | F3 | Low | Server-supplied strings reach Qt widgets that can interpret rich text |
